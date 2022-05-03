@@ -8,6 +8,7 @@ import (
 	viamutils "go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/control"
 	pb "go.viam.com/rdk/proto/api/component/motor/v1"
@@ -51,7 +52,6 @@ var Subtype = resource.NewSubtype(
 
 // A Motor represents a physical motor connected to a board.
 type Motor interface {
-
 	// SetPower sets the percentage of power the motor should employ between -1 and 1.
 	// Negative power implies a backward directional rotational
 	SetPower(ctx context.Context, powerPct float64) error
@@ -83,6 +83,8 @@ type Motor interface {
 
 	// IsPowered returns whether or not the motor is currently on.
 	IsPowered(ctx context.Context) (bool, error)
+
+	generic.Generic
 }
 
 // A LocalMotor is a motor that supports additional features provided by RDK
@@ -161,6 +163,12 @@ func (r *reconfigurableMotor) ProxyFor() interface{} {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.actual
+}
+
+func (r *reconfigurableMotor) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.actual.Do(ctx, cmd)
 }
 
 func (r *reconfigurableMotor) SetPower(ctx context.Context, powerPct float64) error {
@@ -267,8 +275,8 @@ type PinConfig struct {
 	B             string `json:"b"`
 	Direction     string `json:"dir"`
 	PWM           string `json:"pwm"`
-	EnablePinHigh string `json:"enHigh,omitempty"`
-	EnablePinLow  string `json:"enLow,omitempty"`
+	EnablePinHigh string `json:"en_high,omitempty"`
+	EnablePinLow  string `json:"en_low,omitempty"`
 	Step          string `json:"step,omitempty"`
 }
 
@@ -278,26 +286,26 @@ type Config struct {
 	BoardName     string                `json:"board"`                   // used to get encoders
 	MinPowerPct   float64               `json:"min_power_pct,omitempty"` // min power percentage to allow for this motor default is 0.0
 	MaxPowerPct   float64               `json:"max_power_pct,omitempty"` // max power percentage to allow for this motor (0.06 - 1.0)
-	PWMFreq       uint                  `json:"pwmFreq,omitempty"`
+	PWMFreq       uint                  `json:"pwm_freq,omitempty"`
 	DirectionFlip bool                  `json:"dir_flip,omitempty"`       // Flip the direction of the signal sent if there is a Dir pin
-	StepperDelay  uint                  `json:"stepperDelay,omitempty"`   // When using stepper motors, the time to remain high
+	StepperDelay  uint                  `json:"stepper_delay,omitempty"`  // When using stepper motors, the time to remain high
 	ControlLoop   control.ControlConfig `json:"control_config,omitempty"` // Optional control loop
 
 	// Encoder Config
 	EncoderBoard     string  `json:"encoder_board,omitempty"`    // name of the board where encoders are; default is same as 'board'
 	EncoderA         string  `json:"encoder,omitempty"`          // name of the digital interrupt that is the encoder a
-	EncoderB         string  `json:"encoderB,omitempty"`         // name of the digital interrupt that is hall encoder b
-	RampRate         float64 `json:"rampRate,omitempty"`         // how fast to ramp power to motor when using rpm control
+	EncoderB         string  `json:"encoder_b,omitempty"`        // name of the digital interrupt that is hall encoder b
+	RampRate         float64 `json:"ramp_rate,omitempty"`        // how fast to ramp power to motor when using rpm control
 	MaxRPM           float64 `json:"max_rpm"`                    // RPM
 	MaxAcceleration  float64 `json:"max_acceleration,omitempty"` // RPM per second
-	TicksPerRotation int     `json:"ticksPerRotation"`
+	TicksPerRotation int     `json:"ticks_per_rotation"`
 }
 
 // RegisterConfigAttributeConverter registers a Config converter.
 // Note(erd): This probably shouldn't exist since not all motors have the same config requirements.
 func RegisterConfigAttributeConverter(model string) {
 	config.RegisterComponentAttributeMapConverter(
-		config.ComponentTypeMotor,
+		SubtypeName,
 		model,
 		func(attributes config.AttributeMap) (interface{}, error) {
 			var conf Config

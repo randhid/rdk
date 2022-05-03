@@ -7,6 +7,7 @@ import (
 	"github.com/edaniels/golog"
 	"go.viam.com/utils/rpc"
 
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/grpc"
 	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	pb "go.viam.com/rdk/proto/api/component/arm/v1"
@@ -81,17 +82,11 @@ func (c *client) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
 	return resp.Pose, nil
 }
 
-func (c *client) MoveToPosition(ctx context.Context, pose *commonpb.Pose, obstacles []*referenceframe.GeometriesInFrame) error {
-	geometriesInFrames := make([]*commonpb.GeometriesInFrame, len(obstacles))
-	for i, obstacle := range obstacles {
-		geometriesInFrames[i] = referenceframe.GeometriesInFrameToProtobuf(obstacle)
-	}
+func (c *client) MoveToPosition(ctx context.Context, pose *commonpb.Pose, worldState *commonpb.WorldState) error {
 	_, err := c.client.MoveToPosition(ctx, &pb.MoveToPositionRequest{
-		Name: c.name,
-		To:   pose,
-		WorldState: &commonpb.WorldState{
-			Obstacles: geometriesInFrames,
-		},
+		Name:       c.name,
+		To:         pose,
+		WorldState: worldState,
 	})
 	return err
 }
@@ -134,4 +129,8 @@ func (c *client) GoToInputs(ctx context.Context, goal []referenceframe.Input) er
 // Close cleanly closes the underlying connections.
 func (c *client) Close() error {
 	return c.serviceClient.Close()
+}
+
+func (c *client) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	return generic.DoFromConnection(ctx, c.conn, c.name, cmd)
 }

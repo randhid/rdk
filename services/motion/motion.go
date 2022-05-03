@@ -12,6 +12,8 @@ import (
 
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/motionplan"
+	"go.viam.com/rdk/operation"
+	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	servicepb "go.viam.com/rdk/proto/api/service/motion/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/registry"
@@ -50,12 +52,13 @@ type Service interface {
 		ctx context.Context,
 		componentName resource.Name,
 		destination *referenceframe.PoseInFrame,
-		obstacles []*referenceframe.GeometriesInFrame,
+		worldState *commonpb.WorldState,
 	) (bool, error)
 	GetPose(
 		ctx context.Context,
 		componentName resource.Name,
 		destinationFrame string,
+		supplementalTransforms []*commonpb.Transform,
 	) (*referenceframe.PoseInFrame, error)
 }
 
@@ -87,13 +90,9 @@ func FromRobot(r robot.Robot) (Service, error) {
 
 // New returns a new move and grab service for the given robot.
 func New(ctx context.Context, r robot.Robot, config config.Service, logger golog.Logger) (Service, error) {
-	fsSvcIfc, err := r.ResourceByName(framesystem.Name)
+	fsSvc, err := framesystem.FromRobot(r)
 	if err != nil {
 		return nil, err
-	}
-	fsSvc, ok := fsSvcIfc.(framesystem.Service)
-	if !ok {
-		return nil, utils.NewUnimplementedInterfaceError("framesystem.Service", fsSvcIfc)
 	}
 
 	return &motionService{
@@ -114,8 +113,9 @@ func (ms *motionService) Move(
 	ctx context.Context,
 	componentName resource.Name,
 	destination *referenceframe.PoseInFrame,
-	obstacles []*referenceframe.GeometriesInFrame,
+	worldState *commonpb.WorldState,
 ) (bool, error) {
+	operation.CancelOtherWithLabel(ctx, "motion-service")
 	logger := ms.r.Logger()
 
 	// get goal frame
@@ -125,8 +125,7 @@ func (ms *motionService) Move(
 	}
 	logger.Debugf("goal given in frame of %q", goalFrameName)
 
-	// get the frame system of the robot
-	frameSys, err := ms.r.FrameSystem(ctx, "", "")
+	frameSys, err := framesystem.RobotFrameSystem(ctx, ms.r, worldState.GetTransforms())
 	if err != nil {
 		return false, err
 	}
@@ -173,7 +172,7 @@ func (ms *motionService) Move(
 	}
 
 	// the goal is to move the component to goalPose which is specified in coordinates of goalFrameName
-	_ = obstacles // TODO(rb) incorporate obstacles into motion planning
+	_ = worldState // TODO(rb) incorporate obstacles into motion planning
 	output, err := solver.SolvePose(ctx, input, goalPose.Pose(), componentName.Name, solvingFrame)
 	if err != nil {
 		return false, err
@@ -199,6 +198,7 @@ func (ms *motionService) GetPose(
 	ctx context.Context,
 	componentName resource.Name,
 	destinationFrame string,
+	supplementalTransforms []*commonpb.Transform,
 ) (*referenceframe.PoseInFrame, error) {
 	if destinationFrame == "" {
 		destinationFrame = referenceframe.World
@@ -210,5 +210,6 @@ func (ms *motionService) GetPose(
 			spatialmath.NewPoseFromPoint(r3.Vector{0, 0, 0}),
 		),
 		destinationFrame,
+		supplementalTransforms,
 	)
 }

@@ -5,18 +5,24 @@ import (
 	"fmt"
 	"image"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/edaniels/golog"
 	"github.com/golang/geo/r3"
 	"go.opencensus.io/trace"
+	"go.viam.com/utils"
 
 	"go.viam.com/rdk/component/camera"
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/pointcloud"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/rimage"
 	"go.viam.com/rdk/robot"
+	"go.viam.com/rdk/services/framesystem"
 	"go.viam.com/rdk/spatialmath"
 	rdkutils "go.viam.com/rdk/utils"
 )
@@ -38,7 +44,7 @@ func init() {
 			return newJoinPointCloudSource(r, attrs)
 		}})
 
-	config.RegisterComponentAttributeMapConverter(config.ComponentTypeCamera, "join_pointclouds",
+	config.RegisterComponentAttributeMapConverter(camera.SubtypeName, "join_pointclouds",
 		func(attributes config.AttributeMap) (interface{}, error) {
 			var conf JoinAttrs
 			attrs, err := config.TransformAttributeMapToStruct(&conf, attributes)
@@ -64,6 +70,7 @@ type JoinAttrs struct {
 // the point of view of targetName. The model needs to have the entire robot available in order to build the correct offsets
 // between robot components for the frame system transform.
 type joinPointCloudSource struct {
+	generic.Unimplemented
 	sourceCameras []camera.Camera
 	sourceNames   []string
 	targetName    string
@@ -100,56 +107,113 @@ func (jpcs *joinPointCloudSource) NextPointCloud(ctx context.Context) (pointclou
 	ctx, span := trace.StartSpan(ctx, "joinPointCloudSource::NextPointCloud")
 	defer span.End()
 
-	pcTo := pointcloud.New()
-	fs, err := jpcs.robot.FrameSystem(ctx, "join_cameras", "")
+	fs, err := framesystem.RobotFrameSystem(ctx, jpcs.robot, nil)
 	if err != nil {
 		return nil, err
 	}
+
 	inputs, err := jpcs.initializeInputs(ctx, fs)
 	if err != nil {
 		return nil, err
 	}
+
+	finalPoints := make(chan []pointcloud.PointAndData, 50)
+	activeReaders := int32(len(jpcs.sourceCameras))
+
 	for i, cam := range jpcs.sourceCameras {
-		pcSrc, err := func() (pointcloud.PointCloud, error) {
-			ctx, span := trace.StartSpan(ctx, "joinPointCloudSource::NextPointCloud::"+jpcs.sourceNames[i]+"-NextPointCloud")
+		iCopy := i
+		camCopy := cam
+		utils.PanicCapturingGo(func() {
+			ctx, span := trace.StartSpan(ctx, "joinPointCloudSource::NextPointCloud::"+jpcs.sourceNames[iCopy])
 			defer span.End()
-			return cam.NextPointCloud(ctx)
-		}()
-		if err != nil {
-			return nil, err
-		}
-		if jpcs.sourceNames[i] == jpcs.targetName {
-			pcSrc.Iterate(func(p pointcloud.Point) bool {
-				err = pcTo.Set(p)
-				return err == nil
-			})
-		} else {
-			theTransform, err := fs.TransformFrame(inputs, jpcs.sourceNames[i], jpcs.targetName)
+
+			defer func() {
+				atomic.AddInt32(&activeReaders, -1)
+			}()
+			pcSrc, err := func() (pointcloud.PointCloud, error) {
+				ctx, span := trace.StartSpan(ctx, "joinPointCloudSource::NextPointCloud::"+jpcs.sourceNames[iCopy]+"-NextPointCloud")
+				defer span.End()
+				return camCopy.NextPointCloud(ctx)
+			}()
 			if err != nil {
-				return nil, err
+				panic(err) // TODO(erh) is there something better to do?
 			}
 
-			pcSrc.Iterate(func(p pointcloud.Point) bool {
-				vec := r3.Vector(p.Position())
+			theTransform, err := fs.TransformFrame(inputs, jpcs.sourceNames[iCopy], jpcs.targetName)
+			if err != nil {
+				panic(err) // TODO(erh) is there something better to do?
+			}
 
-				newPose := spatialmath.Compose(theTransform.Pose(), spatialmath.NewPoseFromPoint(vec))
+			var wg sync.WaitGroup
+			const numLoops = 8
+			wg.Add(numLoops)
+			for loop := 0; loop < numLoops; loop++ {
+				f := func(loop int) {
+					defer wg.Done()
+					const batchSize = 500
+					batch := make([]pointcloud.PointAndData, 0, batchSize)
+					savedDualQuat := spatialmath.NewZeroPose()
+					pcSrc.Iterate(numLoops, loop, func(p r3.Vector, d pointcloud.Data) bool {
+						if jpcs.sourceNames[iCopy] != jpcs.targetName {
+							spatialmath.ResetPoseDQTransalation(savedDualQuat, p)
+							newPose := spatialmath.Compose(theTransform.Pose(), savedDualQuat)
+							p = newPose.Point()
+						}
+						batch = append(batch, pointcloud.PointAndData{p, d})
+						if len(batch) > batchSize {
+							finalPoints <- batch
+							batch = make([]pointcloud.PointAndData, 0, batchSize)
+						}
+						return true
+					})
+					finalPoints <- batch
+				}
+				loopCopy := loop
+				utils.PanicCapturingGo(func() { f(loopCopy) })
+			}
+			wg.Wait()
+		})
+	}
 
-				newPt := p.Clone(pointcloud.Vec3(newPose.Point()))
-				err = pcTo.Set(newPt)
-				return err == nil
-			})
-		}
-		if err != nil {
-			return nil, err
+	var pcTo pointcloud.PointCloud
+
+	dataLastTime := false
+	for dataLastTime || atomic.LoadInt32(&activeReaders) > 0 {
+		select {
+		case ps := <-finalPoints:
+			for _, p := range ps {
+				if pcTo == nil {
+					if p.D == nil {
+						pcTo = pointcloud.NewAppendOnlyOnlyPointsPointCloud(len(jpcs.sourceNames) * 640 * 800)
+					} else {
+						pcTo = pointcloud.NewWithPrealloc(len(jpcs.sourceNames) * 640 * 800)
+					}
+				}
+
+				myErr := pcTo.Set(p.P, p.D)
+				if myErr != nil {
+					err = myErr
+				}
+			}
+			dataLastTime = true
+		case <-time.After(5 * time.Millisecond):
+			dataLastTime = false
+			continue
 		}
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
 	return pcTo, nil
 }
 
 // initalizeInputs gets all the input positions for the robot components in order to calculate the frame system offsets.
 func (jpcs *joinPointCloudSource) initializeInputs(
 	ctx context.Context,
-	fs referenceframe.FrameSystem) (map[string][]referenceframe.Input, error) {
+	fs referenceframe.FrameSystem,
+) (map[string][]referenceframe.Input, error) {
 	inputs := referenceframe.StartPositions(fs)
 
 	for k, original := range inputs {

@@ -3,13 +3,14 @@ package inject
 
 import (
 	"context"
+	"sync"
 
 	"github.com/edaniels/golog"
 	"go.viam.com/utils"
 	"go.viam.com/utils/pexec"
 
 	"go.viam.com/rdk/config"
-	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/operation"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
 )
@@ -20,14 +21,15 @@ type Robot struct {
 	RemoteByNameFunc   func(name string) (robot.Robot, bool)
 	ResourceByNameFunc func(name resource.Name) (interface{}, error)
 	RemoteNamesFunc    func() []string
-	FunctionNamesFunc  func() []string
-	FrameSystemFunc    func(ctx context.Context, name string, prefix string) (referenceframe.FrameSystem, error)
 	ResourceNamesFunc  func() []resource.Name
 	ProcessManagerFunc func() pexec.ProcessManager
 	ConfigFunc         func(ctx context.Context) (*config.Config, error)
 	LoggerFunc         func() golog.Logger
 	CloseFunc          func(ctx context.Context) error
 	RefreshFunc        func(ctx context.Context) error
+
+	ops     *operation.Manager
+	opsLock sync.Mutex
 }
 
 // RemoteByName calls the injected RemoteByName or the real version.
@@ -54,22 +56,6 @@ func (r *Robot) RemoteNames() []string {
 	return r.RemoteNamesFunc()
 }
 
-// FunctionNames calls the injected FunctionNames or the real version.
-func (r *Robot) FunctionNames() []string {
-	if r.FunctionNamesFunc == nil {
-		return r.LocalRobot.FunctionNames()
-	}
-	return r.FunctionNamesFunc()
-}
-
-// FrameSystem calls the injected FrameSystemFunc or the real version.
-func (r *Robot) FrameSystem(ctx context.Context, name, prefix string) (referenceframe.FrameSystem, error) {
-	if r.FrameSystemFunc == nil {
-		return r.LocalRobot.FrameSystem(ctx, name, prefix)
-	}
-	return r.FrameSystemFunc(ctx, name, prefix)
-}
-
 // ResourceNames calls the injected ResourceNames or the real version.
 func (r *Robot) ResourceNames() []resource.Name {
 	if r.ResourceNamesFunc == nil {
@@ -84,6 +70,17 @@ func (r *Robot) ProcessManager() pexec.ProcessManager {
 		return r.LocalRobot.ProcessManager()
 	}
 	return r.ProcessManagerFunc()
+}
+
+// OperationManager calls the injected OperationManager or the real version.
+func (r *Robot) OperationManager() *operation.Manager {
+	r.opsLock.Lock()
+	defer r.opsLock.Unlock()
+
+	if r.ops == nil {
+		r.ops = operation.NewManager()
+	}
+	return r.ops
 }
 
 // Config calls the injected Config or the real version.

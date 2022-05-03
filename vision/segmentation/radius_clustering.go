@@ -3,26 +3,15 @@ package segmentation
 import (
 	"context"
 
+	"github.com/golang/geo/r3"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/component/camera"
 	"go.viam.com/rdk/config"
 	pc "go.viam.com/rdk/pointcloud"
-	"go.viam.com/rdk/utils"
 	"go.viam.com/rdk/vision"
 )
-
-// RadiusClusteringSegmenter is  the name of a segmenter that finds well separated objects on a flat plane.
-const RadiusClusteringSegmenter = "radius_clustering"
-
-func init() {
-	RegisterSegmenter(RadiusClusteringSegmenter,
-		Registration{
-			Segmenter(RadiusClustering),
-			utils.JSONTags(RadiusClusteringConfig{}),
-		})
-}
 
 // RadiusClusteringConfig specifies the necessary parameters for 3D object finding.
 type RadiusClusteringConfig struct {
@@ -132,16 +121,15 @@ func radiusBasedNearestNeighbors(cloud pc.PointCloud, radius float64) ([]pc.Poin
 	var err error
 	clusters := NewSegments()
 	c := 0
-	kdt.Iterate(func(pt pc.Point) bool {
-		v := pt.Position()
+	kdt.Iterate(0, 0, func(v r3.Vector, d pc.Data) bool {
 		// skip if point already is assigned cluster
 		if _, ok := clusters.Indices[v]; ok {
 			return true
 		}
 		// if not assigned, see if any of its neighbors are assigned a cluster
-		nn := kdt.RadiusNearestNeighbors(pt, radius, false)
+		nn := kdt.RadiusNearestNeighbors(v, radius, false)
 		for _, neighbor := range nn {
-			nv := neighbor.Position()
+			nv := neighbor.P
 			ptIndex, ptOk := clusters.Indices[v]
 			neighborIndex, neighborOk := clusters.Indices[nv]
 			switch {
@@ -150,9 +138,9 @@ func radiusBasedNearestNeighbors(cloud pc.PointCloud, radius float64) ([]pc.Poin
 					err = clusters.MergeClusters(ptIndex, neighborIndex)
 				}
 			case !ptOk && neighborOk:
-				err = clusters.AssignCluster(pt, neighborIndex)
+				err = clusters.AssignCluster(v, d, neighborIndex)
 			case ptOk && !neighborOk:
-				err = clusters.AssignCluster(neighbor, ptIndex)
+				err = clusters.AssignCluster(neighbor.P, neighbor.D, ptIndex)
 			}
 			if err != nil {
 				return false
@@ -160,12 +148,12 @@ func radiusBasedNearestNeighbors(cloud pc.PointCloud, radius float64) ([]pc.Poin
 		}
 		// if none of the neighbors were assigned a cluster, create a new cluster and assign all neighbors to it
 		if _, ok := clusters.Indices[v]; !ok {
-			err = clusters.AssignCluster(pt, c)
+			err = clusters.AssignCluster(v, d, c)
 			if err != nil {
 				return false
 			}
 			for _, neighbor := range nn {
-				err = clusters.AssignCluster(neighbor, c)
+				err = clusters.AssignCluster(neighbor.P, neighbor.D, c)
 				if err != nil {
 					return false
 				}

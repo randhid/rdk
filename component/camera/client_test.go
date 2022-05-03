@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"go.viam.com/rdk/component/camera"
+	"go.viam.com/rdk/component/generic"
 	viamgrpc "go.viam.com/rdk/grpc"
 	"go.viam.com/rdk/pointcloud"
 	componentpb "go.viam.com/rdk/proto/api/component/camera/v1"
@@ -40,7 +41,7 @@ func TestClient(t *testing.T) {
 	test.That(t, jpeg.Encode(&imgBuf, img, nil), test.ShouldBeNil)
 
 	pcA := pointcloud.New()
-	err = pcA.Set(pointcloud.NewBasicPoint(5, 5, 5))
+	err = pcA.Set(pointcloud.NewVector(5, 5, 5), nil)
 	test.That(t, err, test.ShouldBeNil)
 
 	var imageReleased bool
@@ -67,6 +68,9 @@ func TestClient(t *testing.T) {
 	resourceSubtype := registry.ResourceSubtypeLookup(camera.Subtype)
 	resourceSubtype.RegisterRPCService(context.Background(), rpcServer, cameraSvc)
 
+	injectCamera.DoFunc = generic.EchoFunc
+	generic.RegisterService(rpcServer, cameraSvc)
+
 	go rpcServer.Serve(listener1)
 	defer rpcServer.Stop()
 
@@ -90,7 +94,14 @@ func TestClient(t *testing.T) {
 
 		pcB, err := camera1Client.NextPointCloud(context.Background())
 		test.That(t, err, test.ShouldBeNil)
-		test.That(t, pcB.At(5, 5, 5), test.ShouldNotBeNil)
+		_, got := pcB.At(5, 5, 5)
+		test.That(t, got, test.ShouldBeTrue)
+
+		// Do
+		resp, err := camera1Client.Do(context.Background(), generic.TestCommand)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp["command"], test.ShouldEqual, generic.TestCommand["command"])
+		test.That(t, resp["data"], test.ShouldEqual, generic.TestCommand["data"])
 
 		test.That(t, utils.TryClose(context.Background(), camera1Client), test.ShouldBeNil)
 	})

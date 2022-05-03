@@ -7,15 +7,18 @@ import (
 	"testing"
 
 	"github.com/edaniels/golog"
-	"github.com/golang/geo/r3"
 	"go.viam.com/test"
 
 	"go.viam.com/rdk/component/base"
 	"go.viam.com/rdk/component/camera"
+	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/pointcloud"
+	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
+	"go.viam.com/rdk/services/framesystem"
+	"go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/testutils/inject"
 	rdkutils "go.viam.com/rdk/utils"
 )
@@ -26,26 +29,51 @@ func makeFakeRobot(t *testing.T) robot.Robot {
 	cam1 := &inject.Camera{}
 	cam1.NextPointCloudFunc = func(ctx context.Context) (pointcloud.PointCloud, error) {
 		pc := pointcloud.New()
-		return pc, pc.Set(pointcloud.NewColoredPoint(1, 0, 0, color.NRGBA{255, 0, 0, 255}))
+		return pc, pc.Set(pointcloud.NewVector(1, 0, 0), pointcloud.NewColoredData(color.NRGBA{255, 0, 0, 255}))
 	}
 	cam2 := &inject.Camera{}
 	cam2.NextPointCloudFunc = func(ctx context.Context) (pointcloud.PointCloud, error) {
 		pc := pointcloud.New()
-		return pc, pc.Set(pointcloud.NewColoredPoint(0, 1, 0, color.NRGBA{0, 255, 0, 255}))
+		return pc, pc.Set(pointcloud.NewVector(0, 1, 0), pointcloud.NewColoredData(color.NRGBA{0, 255, 0, 255}))
 	}
 	cam3 := &inject.Camera{}
 	cam3.NextPointCloudFunc = func(ctx context.Context) (pointcloud.PointCloud, error) {
 		pc := pointcloud.New()
-		return pc, pc.Set(pointcloud.NewColoredPoint(0, 0, 1, color.NRGBA{0, 0, 255, 255}))
+		return pc, pc.Set(pointcloud.NewVector(0, 0, 1), pointcloud.NewColoredData(color.NRGBA{0, 0, 255, 255}))
 	}
 	base1 := &inject.Base{}
+
+	fss := &inject.FrameSystemService{}
+	fsParts := framesystem.Parts{
+		{
+			Name:        "base1",
+			FrameConfig: &config.Frame{Parent: referenceframe.World, Translation: spatialmath.TranslationConfig{0, 0, 0}},
+		},
+		{
+			Name:        "cam1",
+			FrameConfig: &config.Frame{Parent: referenceframe.World, Translation: spatialmath.TranslationConfig{100, 0, 0}},
+		},
+		{
+			Name:        "cam2",
+			FrameConfig: &config.Frame{Parent: "cam1", Translation: spatialmath.TranslationConfig{0, 0, 100}},
+		},
+		{
+			Name:        "cam3",
+			FrameConfig: &config.Frame{Parent: "cam2", Translation: spatialmath.TranslationConfig{0, 100, 0}},
+		},
+	}
+	fss.ConfigFunc = func(
+		ctx context.Context, additionalTransforms []*commonpb.Transform,
+	) (framesystem.Parts, error) {
+		return fsParts, nil
+	}
 
 	r := &inject.Robot{}
 	r.LoggerFunc = func() golog.Logger {
 		return logger
 	}
 	r.ResourceNamesFunc = func() []resource.Name {
-		return []resource.Name{camera.Named("cam1"), camera.Named("cam2"), camera.Named("cam3"), base.Named("base1")}
+		return []resource.Name{camera.Named("cam1"), camera.Named("cam2"), camera.Named("cam3"), base.Named("base1"), framesystem.Name}
 	}
 	r.ResourceByNameFunc = func(n resource.Name) (interface{}, error) {
 		switch n.Name {
@@ -57,29 +85,11 @@ func makeFakeRobot(t *testing.T) robot.Robot {
 			return cam3, nil
 		case "base1":
 			return base1, nil
+		case "":
+			return fss, nil
 		default:
 			return nil, rdkutils.NewResourceNotFoundError(n)
 		}
-	}
-	fs := referenceframe.NewEmptySimpleFrameSystem("test")
-	baseLocation, err := referenceframe.FrameFromPoint("base1", r3.Vector{0, 0, 0}) // base is at world's origin
-	test.That(t, err, test.ShouldBeNil)
-	err = fs.AddFrame(baseLocation, fs.World())
-	test.That(t, err, test.ShouldBeNil)
-	cam1Location, err := referenceframe.FrameFromPoint("cam1", r3.Vector{100, 0, 0}) // cam1 is at 100 unit +x of world's origin
-	test.That(t, err, test.ShouldBeNil)
-	err = fs.AddFrame(cam1Location, fs.World())
-	test.That(t, err, test.ShouldBeNil)
-	cam2Location, err := referenceframe.FrameFromPoint("cam2", r3.Vector{0, 0, 100}) // cam1 is 100 units +z of cam1's origin
-	test.That(t, err, test.ShouldBeNil)
-	err = fs.AddFrame(cam2Location, fs.GetFrame("cam1"))
-	test.That(t, err, test.ShouldBeNil)
-	cam3Location, err := referenceframe.FrameFromPoint("cam3", r3.Vector{0, 100, 0}) // cam1 is 100 units +y of cam2's origin
-	test.That(t, err, test.ShouldBeNil)
-	err = fs.AddFrame(cam3Location, fs.GetFrame("cam2"))
-	test.That(t, err, test.ShouldBeNil)
-	r.FrameSystemFunc = func(ctx context.Context, name string, prefix string) (referenceframe.FrameSystem, error) {
-		return fs, nil
 	}
 	return r
 }
@@ -96,9 +106,18 @@ func TestJoinPointCloud(t *testing.T) {
 	pc, err := joinedCam.NextPointCloud(context.Background())
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, pc.Size(), test.ShouldEqual, 3)
-	test.That(t, pc.At(101, 0, 0).Color(), test.ShouldResemble, &color.NRGBA{255, 0, 0, 255})
-	test.That(t, pc.At(100, 1, 100).Color(), test.ShouldResemble, &color.NRGBA{0, 255, 0, 255})
-	test.That(t, pc.At(100, 100, 101).Color(), test.ShouldResemble, &color.NRGBA{0, 0, 255, 255})
+
+	data, got := pc.At(101, 0, 0)
+	test.That(t, got, test.ShouldBeTrue)
+	test.That(t, data.Color(), test.ShouldResemble, &color.NRGBA{255, 0, 0, 255})
+
+	data, got = pc.At(100, 1, 100)
+	test.That(t, got, test.ShouldBeTrue)
+	test.That(t, data.Color(), test.ShouldResemble, &color.NRGBA{0, 255, 0, 255})
+
+	data, got = pc.At(100, 100, 101)
+	test.That(t, got, test.ShouldBeTrue)
+	test.That(t, data.Color(), test.ShouldResemble, &color.NRGBA{0, 0, 255, 255})
 
 	img, _, err := joinedCam.Next(context.Background())
 	test.That(t, err, test.ShouldBeNil)
@@ -114,9 +133,18 @@ func TestJoinPointCloud(t *testing.T) {
 	pc, err = joinedCam.NextPointCloud(context.Background())
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, pc.Size(), test.ShouldEqual, 3)
-	test.That(t, pc.At(1, 0, 0).Color(), test.ShouldResemble, &color.NRGBA{255, 0, 0, 255})
-	test.That(t, pc.At(0, 1, 100).Color(), test.ShouldResemble, &color.NRGBA{0, 255, 0, 255})
-	test.That(t, pc.At(0, 100, 101).Color(), test.ShouldResemble, &color.NRGBA{0, 0, 255, 255})
+
+	data, got = pc.At(1, 0, 0)
+	test.That(t, got, test.ShouldBeTrue)
+	test.That(t, data.Color(), test.ShouldResemble, &color.NRGBA{255, 0, 0, 255})
+
+	data, got = pc.At(0, 1, 100)
+	test.That(t, got, test.ShouldBeTrue)
+	test.That(t, data.Color(), test.ShouldResemble, &color.NRGBA{0, 255, 0, 255})
+
+	data, got = pc.At(0, 100, 101)
+	test.That(t, got, test.ShouldBeTrue)
+	test.That(t, data.Color(), test.ShouldResemble, &color.NRGBA{0, 0, 255, 255})
 
 	img, _, err = joinedCam.Next(context.Background())
 	test.That(t, err, test.ShouldBeNil)

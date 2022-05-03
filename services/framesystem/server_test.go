@@ -9,6 +9,7 @@ import (
 	"go.viam.com/test"
 
 	"go.viam.com/rdk/config"
+	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	pb "go.viam.com/rdk/proto/api/service/framesystem/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
@@ -47,47 +48,49 @@ func TestServerConfig(t *testing.T) {
 			},
 		}
 
-		injectSvc.ConfigFunc = func(ctx context.Context) ([]*config.FrameSystemPart, error) {
-			return fsConfigs, nil
+		injectSvc.ConfigFunc = func(
+			ctx context.Context, additionalTransforms []*commonpb.Transform,
+		) (framesystem.Parts, error) {
+			return framesystem.Parts(fsConfigs), nil
 		}
 		req := &pb.ConfigRequest{}
 		resp, err := fsServer.Config(context.Background(), req)
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, len(resp.FrameSystemConfigs), test.ShouldEqual, len(fsConfigs))
 		test.That(t, resp.FrameSystemConfigs[0].Name, test.ShouldEqual, fsConfigs[0].Name)
-		test.That(t, resp.FrameSystemConfigs[0].FrameConfig.Parent, test.ShouldEqual, fsConfigs[0].FrameConfig.Parent)
+		test.That(t, resp.FrameSystemConfigs[0].PoseInParentFrame.ReferenceFrame, test.ShouldEqual, fsConfigs[0].FrameConfig.Parent)
 		test.That(t,
-			resp.FrameSystemConfigs[0].FrameConfig.Pose.X,
+			resp.FrameSystemConfigs[0].PoseInParentFrame.Pose.X,
 			test.ShouldAlmostEqual,
 			fsConfigs[0].FrameConfig.Translation.X,
 		)
 		test.That(t,
-			resp.FrameSystemConfigs[0].FrameConfig.Pose.Y,
+			resp.FrameSystemConfigs[0].PoseInParentFrame.Pose.Y,
 			test.ShouldAlmostEqual,
 			fsConfigs[0].FrameConfig.Translation.Y,
 		)
 		test.That(t,
-			resp.FrameSystemConfigs[0].FrameConfig.Pose.Z,
+			resp.FrameSystemConfigs[0].PoseInParentFrame.Pose.Z,
 			test.ShouldAlmostEqual,
 			fsConfigs[0].FrameConfig.Translation.Z,
 		)
 		test.That(t,
-			resp.FrameSystemConfigs[0].FrameConfig.Pose.OX,
+			resp.FrameSystemConfigs[0].PoseInParentFrame.Pose.OX,
 			test.ShouldAlmostEqual,
 			fsConfigs[0].FrameConfig.Orientation.OrientationVectorDegrees().OX,
 		)
 		test.That(t,
-			resp.FrameSystemConfigs[0].FrameConfig.Pose.OY,
+			resp.FrameSystemConfigs[0].PoseInParentFrame.Pose.OY,
 			test.ShouldAlmostEqual,
 			fsConfigs[0].FrameConfig.Orientation.OrientationVectorDegrees().OY,
 		)
 		test.That(t,
-			resp.FrameSystemConfigs[0].FrameConfig.Pose.OZ,
+			resp.FrameSystemConfigs[0].PoseInParentFrame.Pose.OZ,
 			test.ShouldAlmostEqual,
 			fsConfigs[0].FrameConfig.Orientation.OrientationVectorDegrees().OZ,
 		)
 		test.That(t,
-			resp.FrameSystemConfigs[0].FrameConfig.Pose.Theta,
+			resp.FrameSystemConfigs[0].PoseInParentFrame.Pose.Theta,
 			test.ShouldAlmostEqual,
 			fsConfigs[0].FrameConfig.Orientation.OrientationVectorDegrees().Theta,
 		)
@@ -95,7 +98,9 @@ func TestServerConfig(t *testing.T) {
 
 	t.Run("test failing config function", func(t *testing.T) {
 		expectedErr := errors.New("failed to retrieve config")
-		injectSvc.ConfigFunc = func(ctx context.Context) ([]*config.FrameSystemPart, error) {
+		injectSvc.ConfigFunc = func(
+			ctx context.Context, additionalTransforms []*commonpb.Transform,
+		) (framesystem.Parts, error) {
 			return nil, expectedErr
 		}
 		req := &pb.ConfigRequest{}

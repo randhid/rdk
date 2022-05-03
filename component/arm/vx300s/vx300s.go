@@ -21,6 +21,7 @@ import (
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/component/arm"
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/motionplan"
 	commonpb "go.viam.com/rdk/proto/api/common/v1"
@@ -62,6 +63,7 @@ var OffAngles = map[string]float64{
 }
 
 type myArm struct {
+	generic.Unimplemented
 	Joints   map[string][]*servo.Servo
 	moveLock *sync.Mutex
 	logger   golog.Logger
@@ -97,8 +99,8 @@ func getPortMutex(port string) *sync.Mutex {
 }
 
 func newArm(attributes config.AttributeMap, logger golog.Logger) (arm.Arm, error) {
-	usbPort := attributes.String("usbPort")
-	servos, err := findServos(usbPort, attributes.String("baudRate"), attributes.String("armServoCount"))
+	usbPort := attributes.String("usb_port")
+	servos, err := findServos(usbPort, attributes.String("baud_rate"), attributes.String("arm_servo_count"))
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +140,7 @@ func (a *myArm) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
 }
 
 // MoveToPosition moves the arm to the specified cartesian position.
-func (a *myArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, obstacles []*referenceframe.GeometriesInFrame) error {
+func (a *myArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, worldState *commonpb.WorldState) error {
 	joints, err := a.GetJointPositions(ctx)
 	if err != nil {
 		return err

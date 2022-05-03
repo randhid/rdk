@@ -6,7 +6,6 @@ package robotimpl
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/edaniels/golog"
@@ -16,21 +15,19 @@ import (
 	// registers all components.
 	_ "go.viam.com/rdk/component/register"
 	"go.viam.com/rdk/config"
-
-	// register vm engines.
-	_ "go.viam.com/rdk/function/vm/engines/javascript"
-	"go.viam.com/rdk/metadata/service"
-	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/operation"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
 	"go.viam.com/rdk/services/datamanager"
 	"go.viam.com/rdk/services/framesystem"
+	"go.viam.com/rdk/services/metadata"
 
 	// registers all services.
 	_ "go.viam.com/rdk/services/register"
 	"go.viam.com/rdk/services/sensors"
 	"go.viam.com/rdk/services/status"
+	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/services/web"
 	"go.viam.com/rdk/utils"
 )
@@ -39,16 +36,25 @@ var (
 	_ = robot.LocalRobot(&localRobot{})
 
 	// defaultSvc is a list of default robot services.
-	defaultSvc = []resource.Name{sensors.Name, status.Name, web.Name, datamanager.Name}
+	defaultSvc = []resource.Name{
+		metadata.Name,
+		sensors.Name,
+		status.Name,
+		web.Name,
+		datamanager.Name,
+		framesystem.Name,
+		vision.Name,
+	}
 )
 
 // localRobot satisfies robot.LocalRobot and defers most
 // logic to its manager.
 type localRobot struct {
-	mu      sync.Mutex
-	manager *resourceManager
-	config  *config.Config
-	logger  golog.Logger
+	mu         sync.Mutex
+	manager    *resourceManager
+	config     *config.Config
+	operations *operation.Manager
+	logger     golog.Logger
 }
 
 // RemoteByName returns a remote robot by name. If it does not exist
@@ -68,11 +74,6 @@ func (r *localRobot) RemoteNames() []string {
 	return r.manager.RemoteNames()
 }
 
-// FunctionNames returns the name of all known functions.
-func (r *localRobot) FunctionNames() []string {
-	return r.manager.FunctionNames()
-}
-
 // ResourceNames returns the name of all known resources.
 func (r *localRobot) ResourceNames() []resource.Name {
 	return r.manager.ResourceNames()
@@ -81,6 +82,11 @@ func (r *localRobot) ResourceNames() []resource.Name {
 // ProcessManager returns the process manager for the robot.
 func (r *localRobot) ProcessManager() pexec.ProcessManager {
 	return r.manager.processManager
+}
+
+// OperationManager returns the operation manager for the robot.
+func (r *localRobot) OperationManager() *operation.Manager {
+	return r.operations
 }
 
 // Close attempts to cleanly close down all constituent parts of the robot.
@@ -95,53 +101,6 @@ func (r *localRobot) Config(ctx context.Context) (*config.Config, error) {
 	cfgCpy.Components = append([]config.Component{}, cfgCpy.Components...)
 
 	return &cfgCpy, nil
-}
-
-// getRemoteConfig gets the parameters for the Remote.
-func (r *localRobot) getRemoteConfig(remoteName string) (*config.Remote, error) {
-	for _, rConf := range r.config.Remotes {
-		if rConf.Name == remoteName {
-			return &rConf, nil
-		}
-	}
-	return nil, fmt.Errorf("cannot find Remote config with name %q", remoteName)
-}
-
-// FrameSystem returns the FrameSystem of the robot.
-func (r *localRobot) FrameSystem(ctx context.Context, name, prefix string) (referenceframe.FrameSystem, error) {
-	logger := r.Logger()
-	// create the base reference frame system
-	fsService, err := framesystem.FromRobot(r)
-	if err != nil {
-		return nil, err
-	}
-	parts, err := fsService.Config(ctx)
-	if err != nil {
-		return nil, err
-	}
-	baseFrameSys, err := framesystem.NewFrameSystemFromParts(name, "", parts, logger)
-	if err != nil {
-		return nil, err
-	}
-	logger.Debugf("base frame system %q has frames %v", baseFrameSys.Name(), baseFrameSys.FrameNames())
-	// get frame system for each of its remote parts and merge to base
-	for remoteName, remote := range r.manager.remotes {
-		remoteFrameSys, err := remote.FrameSystem(ctx, remoteName, prefix)
-		if err != nil {
-			return nil, errors.Wrapf(err, "remote %s", remoteName)
-		}
-		rConf, err := r.getRemoteConfig(remoteName)
-		if err != nil {
-			return nil, errors.Wrapf(err, "remote %s", remoteName)
-		}
-		logger.Debugf("merging remote frame system  %q with frames %v", remoteFrameSys.Name(), remoteFrameSys.FrameNames())
-		err = config.MergeFrameSystems(baseFrameSys, remoteFrameSys, rConf.Frame)
-		if err != nil {
-			return nil, errors.Wrapf(err, "remote %s", remoteName)
-		}
-	}
-	logger.Debugf("final frame system  %q has frames %v", baseFrameSys.Name(), baseFrameSys.FrameNames())
-	return baseFrameSys, nil
 }
 
 // Logger returns the logger the robot is using.
@@ -161,7 +120,8 @@ func New(ctx context.Context, cfg *config.Config, logger golog.Logger) (robot.Lo
 			},
 			logger,
 		),
-		logger: logger,
+		operations: operation.NewManager(),
+		logger:     logger,
 	}
 
 	var successful bool
@@ -174,10 +134,6 @@ func New(ctx context.Context, cfg *config.Config, logger golog.Logger) (robot.Lo
 	}()
 	r.config = cfg
 
-	if err := r.manager.processConfig(ctx, cfg, r, logger); err != nil {
-		return nil, err
-	}
-
 	// default services
 	for _, name := range defaultSvc {
 		cfg := config.Service{Type: config.ServiceType(name.ResourceSubtype)}
@@ -187,18 +143,15 @@ func New(ctx context.Context, cfg *config.Config, logger golog.Logger) (robot.Lo
 		}
 		r.manager.addResource(name, svc)
 	}
+	if err := r.manager.processConfig(ctx, cfg, r, logger); err != nil {
+		return nil, err
+	}
 
 	// update default services - done here so that all resources have been created and can be addressed.
 	if err := r.updateDefaultServices(ctx); err != nil {
 		return nil, err
 	}
 
-	// if metadata exists, update it
-	if svc := service.ContextService(ctx); svc != nil {
-		if err := r.UpdateMetadata(svc); err != nil {
-			return nil, err
-		}
-	}
 	successful = true
 	return r, nil
 }
@@ -248,7 +201,20 @@ func getServiceConfig(cfg *config.Config, name resource.Name) (config.Service, e
 func (r *localRobot) updateDefaultServices(ctx context.Context) error {
 	// grab all resources
 	resources := map[resource.Name]interface{}{}
-	for _, n := range r.ResourceNames() {
+
+	var remoteNames []resource.Name
+
+	for _, name := range r.RemoteNames() {
+		res := resource.NewName(
+			resource.ResourceNamespaceRDK,
+			resource.ResourceTypeComponent,
+			resource.ResourceSubtypeRemote,
+			name,
+		)
+		remoteNames = append(remoteNames, res)
+	}
+
+	for _, n := range append(remoteNames, r.ResourceNames()...) {
 		// TODO(RDK-119) if not found, could mean a name clash or a remote service
 		res, err := r.ResourceByName(n)
 		if err != nil {
@@ -283,38 +249,22 @@ func (r *localRobot) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// UpdateMetadata updates metadata service using the currently registered parts of the robot.
-func (r *localRobot) UpdateMetadata(svc service.Metadata) error {
-	var resources []resource.Name
-
-	metadata := resource.NameFromSubtype(service.Subtype, "")
-	resources = append(resources, metadata)
-
-	for _, name := range r.FunctionNames() {
-		res := resource.NewName(
-			resource.ResourceNamespaceRDK,
-			resource.ResourceTypeFunction,
-			resource.ResourceSubtypeFunction,
-			name,
-		)
-		resources = append(resources, res)
+// RobotFromConfigPath is a helper to read and process a config given its path and then create a robot based on it.
+func RobotFromConfigPath(ctx context.Context, cfgPath string, logger golog.Logger) (robot.LocalRobot, error) {
+	cfg, err := config.Read(ctx, cfgPath, logger)
+	if err != nil {
+		logger.Fatal("cannot read config")
+		return nil, err
 	}
-	for _, name := range r.RemoteNames() {
-		res := resource.NewName(
-			resource.ResourceNamespaceRDK,
-			resource.ResourceTypeComponent,
-			resource.ResourceSubtypeRemote,
-			name,
-		)
-		resources = append(resources, res)
-	}
+	return RobotFromConfig(ctx, cfg, logger)
+}
 
-	for _, n := range r.ResourceNames() {
-		// skip web so it doesn't show up over grpc
-		if n == web.Name {
-			continue
-		}
-		resources = append(resources, n)
+// RobotFromConfig is a helper to process a config and then create a robot based on it.
+func RobotFromConfig(ctx context.Context, cfg *config.Config, logger golog.Logger) (robot.LocalRobot, error) {
+	tlsConfig := config.NewTLSConfig(cfg)
+	processedCfg, err := config.ProcessConfig(cfg, tlsConfig)
+	if err != nil {
+		return nil, err
 	}
-	return svc.Replace(resources)
+	return New(ctx, processedCfg, logger)
 }

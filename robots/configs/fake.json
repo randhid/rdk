@@ -39,7 +39,7 @@
                         "pin": "0"
                     }
                 ],
-                "digitalInterrupts":
+                "digital_interrupts":
                 [
                     {
                         "name": "encoder",
@@ -70,8 +70,13 @@
                     "b": "2",
                     "pwm": "3"
                 },
-                "ticksPerRotation": 100
+                "ticks_per_rotation": 100
             }
+        }
+    ],
+    "services": [
+        {
+            "type": "object_segmentation"
         }
     ]
 }

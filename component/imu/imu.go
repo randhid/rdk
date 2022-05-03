@@ -11,6 +11,7 @@ import (
 	viamutils "go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/component/sensor"
 	"go.viam.com/rdk/data"
 	pb "go.viam.com/rdk/proto/api/component/imu/v1"
@@ -68,11 +69,14 @@ func Named(name string) resource.Name {
 	return resource.NameFromSubtype(Subtype, name)
 }
 
-// An IMU represents a sensor that can report AngularVelocity and Orientation measurements.
+// An IMU represents a sensor that can report AngularVelocity, Orientation, Acceleration and Magnetometer
+// measurements.
 type IMU interface {
 	ReadAngularVelocity(ctx context.Context) (spatialmath.AngularVelocity, error)
 	ReadOrientation(ctx context.Context) (spatialmath.Orientation, error)
 	ReadAcceleration(ctx context.Context) (r3.Vector, error)
+	ReadMagnetometer(ctx context.Context) (r3.Vector, error)
+	generic.Generic
 }
 
 var (
@@ -114,7 +118,17 @@ func GetReadings(ctx context.Context, i IMU) ([]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []interface{}{vel.X, vel.Y, vel.Z, ea.Roll, ea.Pitch, ea.Yaw, ac.X, ac.Y, ac.Z}, nil
+	mg, err := i.ReadMagnetometer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return []interface{}{
+		vel.X, vel.Y, vel.Z,
+		ea.Roll, ea.Pitch, ea.Yaw,
+		ac.X, ac.Y, ac.Z,
+		mg.X, mg.Y, mg.Z,
+	}, nil
 }
 
 type reconfigurableIMU struct {
@@ -134,22 +148,39 @@ func (r *reconfigurableIMU) ProxyFor() interface{} {
 	return r.actual
 }
 
+// Do passes generic commands/data.
+func (r *reconfigurableIMU) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.actual.Do(ctx, cmd)
+}
+
+// ReadAngularVelocity returns angular velocity from the gyroscope deg_per_sec.
 func (r *reconfigurableIMU) ReadAngularVelocity(ctx context.Context) (spatialmath.AngularVelocity, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.actual.ReadAngularVelocity(ctx)
 }
 
+// ReadOrientation returns gyroscope orientation in degrees.
 func (r *reconfigurableIMU) ReadOrientation(ctx context.Context) (spatialmath.Orientation, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.actual.ReadOrientation(ctx)
 }
 
+// ReadAcceleration returns accelerometer reading in mm_per_sec_per_sec.
 func (r *reconfigurableIMU) ReadAcceleration(ctx context.Context) (r3.Vector, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.actual.ReadAcceleration(ctx)
+}
+
+// ReadMagnetometer returns megnetif field data in gauss.
+func (r *reconfigurableIMU) ReadMagnetometer(ctx context.Context) (r3.Vector, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.actual.ReadMagnetometer(ctx)
 }
 
 // GetReadings will use the default IMU GetReadings if not provided.

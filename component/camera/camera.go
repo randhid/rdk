@@ -9,9 +9,11 @@ import (
 	"github.com/edaniels/golog"
 	"github.com/edaniels/gostream"
 	"github.com/pkg/errors"
+	"go.opencensus.io/trace"
 	viamutils "go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/pointcloud"
 	pb "go.viam.com/rdk/proto/api/component/camera/v1"
@@ -64,13 +66,13 @@ func Named(name string) resource.Name {
 // A Camera represents anything that can capture frames.
 type Camera interface {
 	gostream.ImageSource
+	generic.Generic
 	NextPointCloud(ctx context.Context) (pointcloud.PointCloud, error)
 }
 
 // WithProjector is a camera with the capability to project images to 3D.
 type WithProjector interface {
 	Camera
-	rimage.Projector
 	GetProjector() rimage.Projector
 }
 
@@ -93,23 +95,24 @@ func New(imgSrc gostream.ImageSource, attrs *AttrConfig, parentSource Camera) (C
 	}
 	// if the camera parameters are specified in the config, those get priority.
 	if attrs != nil && attrs.CameraParameters != nil {
-		return &imageSourceWithProjector{imgSrc, attrs.CameraParameters}, nil
+		return &imageSourceWithProjector{imgSrc, attrs.CameraParameters, generic.Unimplemented{}}, nil
 	}
 	// inherit camera parameters from source camera if possible. if not, create a camera without projector.
 	if reconfigCam, ok := parentSource.(*reconfigurableCamera); ok {
 		if c, ok := reconfigCam.ProxyFor().(WithProjector); ok {
-			return &imageSourceWithProjector{imgSrc, c.GetProjector()}, nil
+			return &imageSourceWithProjector{imgSrc, c.GetProjector(), generic.Unimplemented{}}, nil
 		}
 	}
 	if camera, ok := parentSource.(WithProjector); ok {
-		return &imageSourceWithProjector{imgSrc, camera.GetProjector()}, nil
+		return &imageSourceWithProjector{imgSrc, camera.GetProjector(), generic.Unimplemented{}}, nil
 	}
-	return &imageSource{imgSrc}, nil
+	return &imageSource{imgSrc, generic.Unimplemented{}}, nil
 }
 
 // ImageSource implements a Camera with a gostream.ImageSource.
 type imageSource struct {
 	gostream.ImageSource
+	generic.Unimplemented
 }
 
 // Close closes the underlying ImageSource.
@@ -119,6 +122,8 @@ func (is *imageSource) Close(ctx context.Context) error {
 
 // NextPointCloud returns the next PointCloud from the camera, or will error if not supported.
 func (is *imageSource) NextPointCloud(ctx context.Context) (pointcloud.PointCloud, error) {
+	ctx, span := trace.StartSpan(ctx, "camera::imageSource::NextPointCloud")
+	defer span.End()
 	if c, ok := is.ImageSource.(Camera); ok {
 		return c.NextPointCloud(ctx)
 	}
@@ -128,7 +133,8 @@ func (is *imageSource) NextPointCloud(ctx context.Context) (pointcloud.PointClou
 // ImageSourceWithProjector implements a CameraWithProjector with a gostream.ImageSource and Projector.
 type imageSourceWithProjector struct {
 	gostream.ImageSource
-	rimage.Projector
+	projector rimage.Projector
+	generic.Unimplemented
 }
 
 // Close closes the underlying ImageSource.
@@ -138,11 +144,13 @@ func (iswp *imageSourceWithProjector) Close(ctx context.Context) error {
 
 // Projector returns the camera's Projector.
 func (iswp *imageSourceWithProjector) GetProjector() rimage.Projector {
-	return iswp.Projector
+	return iswp.projector
 }
 
 // NextPointCloud returns the next PointCloud from the camera, or will error if not supported.
 func (iswp *imageSourceWithProjector) NextPointCloud(ctx context.Context) (pointcloud.PointCloud, error) {
+	ctx, span := trace.StartSpan(ctx, "camera::imageSourceWithProjector::NextPointCloud")
+	defer span.End()
 	if c, ok := iswp.ImageSource.(Camera); ok {
 		return c.NextPointCloud(ctx)
 	}
@@ -150,8 +158,21 @@ func (iswp *imageSourceWithProjector) NextPointCloud(ctx context.Context) (point
 	if err != nil {
 		return nil, err
 	}
+
+	dm, ok := img.(*rimage.DepthMap)
+	if ok {
+		return dm.ToPointCloud(iswp.projector), nil
+	}
+
 	defer closer()
-	return iswp.ImageWithDepthToPointCloud(rimage.ConvertToImageWithDepth(img))
+
+	_, toImageWithDepthSpan := trace.StartSpan(ctx, "camera::imageSourceWithProjector::NextPointCloud::ConvertToImageWithDepth")
+	imageWithDepth := rimage.ConvertToImageWithDepth(img)
+	toImageWithDepthSpan.End()
+
+	_, toPcdSpan := trace.StartSpan(ctx, "camera::imageSourceWithProjector::NextPointCloud::ImageWithDepthToPointCloud")
+	defer toPcdSpan.End()
+	return iswp.projector.ImageWithDepthToPointCloud(imageWithDepth)
 }
 
 // WrapWithReconfigurable wraps a camera with a reconfigurable and locking interface.
@@ -216,6 +237,12 @@ func (c *reconfigurableCamera) Close(ctx context.Context) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return viamutils.TryClose(ctx, c.actual)
+}
+
+func (c *reconfigurableCamera) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.actual.Do(ctx, cmd)
 }
 
 // Reconfigure reconfigures the resource.

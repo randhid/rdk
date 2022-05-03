@@ -10,6 +10,8 @@ import (
 	viamutils "go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 
+	"go.viam.com/rdk/component/generic"
+	"go.viam.com/rdk/component/sensor"
 	pb "go.viam.com/rdk/proto/api/component/posetracker/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/registry"
@@ -47,13 +49,14 @@ var Subtype = resource.NewSubtype(
 	SubtypeName,
 )
 
-// Named is a helper for getting the named ForceMatrix's typed resource name.
+// Named is a helper for getting the named PoseTracker's typed resource name.
 func Named(name string) resource.Name {
 	return resource.NameFromSubtype(Subtype, name)
 }
 
 var (
 	_ = PoseTracker(&reconfigurablePoseTracker{})
+	_ = sensor.Sensor(&reconfigurablePoseTracker{})
 	_ = resource.Reconfigurable(&reconfigurablePoseTracker{})
 )
 
@@ -65,6 +68,7 @@ type BodyToPoseInFrame map[string]*referenceframe.PoseInFrame
 // given in the context of the PoseTracker's frame of reference.
 type PoseTracker interface {
 	GetPoses(ctx context.Context, bodyNames []string) (BodyToPoseInFrame, error)
+	generic.Generic
 }
 
 // FromRobot is a helper for getting the named force matrix sensor from the given Robot.
@@ -80,6 +84,26 @@ func FromRobot(r robot.Robot, name string) (PoseTracker, error) {
 	return part, nil
 }
 
+// GetReadings is a helper for getting all readings from a PoseTracker.
+func GetReadings(ctx context.Context, poseTracker PoseTracker) ([]interface{}, error) {
+	poseLookup, err := poseTracker.GetPoses(ctx, []string{})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]interface{}, 0)
+	for bodyName, poseInFrame := range poseLookup {
+		pose := poseInFrame.Pose()
+		orientationVec := pose.Orientation().OrientationVectorRadians()
+		poseInfo := []interface{}{
+			bodyName, poseInFrame.FrameName(),
+			pose.Point().X, pose.Point().Y, pose.Point().Z,
+			orientationVec.OX, orientationVec.OY, orientationVec.OZ, orientationVec.Theta,
+		}
+		result = append(result, poseInfo)
+	}
+	return result, nil
+}
+
 type reconfigurablePoseTracker struct {
 	mu     sync.RWMutex
 	actual PoseTracker
@@ -89,6 +113,13 @@ func (r *reconfigurablePoseTracker) ProxyFor() interface{} {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.actual
+}
+
+// Do passes generic commands/data.
+func (r *reconfigurablePoseTracker) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.actual.Do(ctx, cmd)
 }
 
 func (r *reconfigurablePoseTracker) GetPoses(
@@ -119,6 +150,17 @@ func (r *reconfigurablePoseTracker) Reconfigure(
 	}
 	r.actual = actual.actual
 	return nil
+}
+
+// GetReadings will use the default PoseTracker GetReadings if not provided.
+func (r *reconfigurablePoseTracker) GetReadings(ctx context.Context) ([]interface{}, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if sensor, ok := r.actual.(sensor.Sensor); ok {
+		return sensor.GetReadings(ctx)
+	}
+	return GetReadings(ctx, r.actual)
 }
 
 // WrapWithReconfigurable converts a regular PoseTracker implementation to a reconfigurablePoseTracker.

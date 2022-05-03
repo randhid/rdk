@@ -17,6 +17,7 @@ import (
 
 	"go.viam.com/rdk/component/arm"
 	"go.viam.com/rdk/component/board"
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/motionplan"
 	commonpb "go.viam.com/rdk/proto/api/common/v1"
@@ -67,12 +68,13 @@ func (jc jointConfig) toHw(degrees float64) int {
 func init() {
 	registry.RegisterComponent(arm.Subtype, "yahboom-dofbot", registry.Component{
 		Constructor: func(ctx context.Context, r robot.Robot, config config.Component, logger golog.Logger) (interface{}, error) {
-			return newDofBot(r, config, logger)
+			return newDofBot(ctx, r, config, logger)
 		},
 	})
 }
 
 type dofBot struct {
+	generic.Unimplemented
 	handle board.I2CHandle
 	model  referenceframe.Model
 	mp     motionplan.MotionPlanner
@@ -93,7 +95,7 @@ func createDofBotSolver(logger golog.Logger) (referenceframe.Model, motionplan.M
 	return model, mp, nil
 }
 
-func newDofBot(r robot.Robot, config config.Component, logger golog.Logger) (arm.Arm, error) {
+func newDofBot(ctx context.Context, r robot.Robot, config config.Component, logger golog.Logger) (arm.Arm, error) {
 	var err error
 
 	a := dofBot{}
@@ -120,6 +122,10 @@ func newDofBot(r robot.Robot, config config.Component, logger golog.Logger) (arm
 	if err != nil {
 		return nil, err
 	}
+	_, err = a.GetEndPosition(ctx)
+	if err != nil {
+		return nil, errors.New("issue pinging yahboom motors, check connection to motors")
+	}
 
 	a.logger = logger
 
@@ -136,7 +142,7 @@ func (a *dofBot) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
 }
 
 // MoveToPosition moves the arm to the given absolute position.
-func (a *dofBot) MoveToPosition(ctx context.Context, pos *commonpb.Pose, obstacles []*referenceframe.GeometriesInFrame) error {
+func (a *dofBot) MoveToPosition(ctx context.Context, pos *commonpb.Pose, worldState *commonpb.WorldState) error {
 	joints, err := a.GetJointPositions(ctx)
 	if err != nil {
 		return err

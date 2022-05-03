@@ -6,13 +6,12 @@ import (
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/config"
-	functionvm "go.viam.com/rdk/function/vm"
 )
 
 // RegisterConfigAttributeConverter registers a board.Config converter.
 func RegisterConfigAttributeConverter(model string) {
 	config.RegisterComponentAttributeMapConverter(
-		config.ComponentTypeBoard,
+		SubtypeName,
 		model,
 		func(attributes config.AttributeMap) (interface{}, error) {
 			var conf Config
@@ -26,7 +25,7 @@ type Config struct {
 	I2Cs              []I2CConfig              `json:"i2cs"`
 	SPIs              []SPIConfig              `json:"spis"`
 	Analogs           []AnalogConfig           `json:"analogs"`
-	DigitalInterrupts []DigitalInterruptConfig `json:"digitalInterrupts"`
+	DigitalInterrupts []DigitalInterruptConfig `json:"digital_interrupts"`
 	Attributes        config.AttributeMap      `json:"attributes"`
 }
 
@@ -92,8 +91,8 @@ type AnalogConfig struct {
 	Pin               string `json:"pin"`         // analog input pin on the ADC itself
 	SPIBus            string `json:"spi_bus"`     // name of the SPI bus (which is configured elsewhere in the config file)
 	ChipSelect        string `json:"chip_select"` // the CS line for the ADC chip, typically a pin number on the board
-	AverageOverMillis int    `json:"averageOverMillis"`
-	SamplesPerSecond  int    `json:"samplesPerSecond"`
+	AverageOverMillis int    `json:"average_over_ms"`
+	SamplesPerSecond  int    `json:"samples_per_sec"`
 }
 
 // Validate ensures all parts of the config are valid.
@@ -106,20 +105,16 @@ func (config *AnalogConfig) Validate(path string) error {
 
 // DigitalInterruptConfig describes the configuration of digital interrupt for a board.
 type DigitalInterruptConfig struct {
-	Name     string                              `json:"name"`
-	Pin      string                              `json:"pin"`
-	Type     string                              `json:"type"` // e.g. basic, servo
-	Formula  string                              `json:"formula"`
-	Function *functionvm.AnonymousFunctionConfig `json:"function,omitempty"`
+	Name    string `json:"name"`
+	Pin     string `json:"pin"`
+	Type    string `json:"type"` // e.g. basic, servo
+	Formula string `json:"formula"`
 }
 
 // Validate ensures all parts of the config are valid.
 func (config *DigitalInterruptConfig) Validate(path string) error {
 	if config.Name == "" {
 		return utils.NewConfigValidationFieldRequiredError(path, "name")
-	}
-	if config.Function != nil {
-		return config.Function.Validate(fmt.Sprintf("%s.%s", path, "function"))
 	}
 	return nil
 }

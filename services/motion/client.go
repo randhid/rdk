@@ -57,18 +57,12 @@ func (c *client) Move(
 	ctx context.Context,
 	componentName resource.Name,
 	destination *referenceframe.PoseInFrame,
-	obstacles []*referenceframe.GeometriesInFrame,
+	worldState *commonpb.WorldState,
 ) (bool, error) {
-	geometriesInFrames := make([]*commonpb.GeometriesInFrame, len(obstacles))
-	for i, obstacle := range obstacles {
-		geometriesInFrames[i] = referenceframe.GeometriesInFrameToProtobuf(obstacle)
-	}
 	resp, err := c.client.Move(ctx, &pb.MoveRequest{
 		ComponentName: protoutils.ResourceNameToProto(componentName),
 		Destination:   referenceframe.PoseInFrameToProtobuf(destination),
-		WorldState: &commonpb.WorldState{
-			Obstacles: geometriesInFrames,
-		},
+		WorldState:    worldState,
 	})
 	if err != nil {
 		return false, err
@@ -80,10 +74,12 @@ func (c *client) GetPose(
 	ctx context.Context,
 	componentName resource.Name,
 	destinationFrame string,
+	supplementalTransforms []*commonpb.Transform,
 ) (*referenceframe.PoseInFrame, error) {
 	resp, err := c.client.GetPose(ctx, &pb.GetPoseRequest{
-		ComponentName:    protoutils.ResourceNameToProto(componentName),
-		DestinationFrame: destinationFrame,
+		ComponentName:          protoutils.ResourceNameToProto(componentName),
+		DestinationFrame:       destinationFrame,
+		SupplementalTransforms: supplementalTransforms,
 	})
 	if err != nil {
 		return nil, err

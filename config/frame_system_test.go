@@ -2,9 +2,11 @@ package config
 
 import (
 	"io/ioutil"
+	"math"
 	"testing"
 
 	"github.com/edaniels/golog"
+	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
 	"go.viam.com/test"
 
@@ -41,13 +43,13 @@ func TestFrameModelPart(t *testing.T) {
 	pose := &commonpb.Pose{OZ: 1, Theta: 0} // zero pose
 	exp := &servicepb.Config{
 		Name: "test",
-		FrameConfig: &servicepb.FrameConfig{
-			Parent: "world",
-			Pose:   pose,
+		PoseInParentFrame: &commonpb.PoseInFrame{
+			ReferenceFrame: "world",
+			Pose:           pose,
 		},
 	}
 	test.That(t, result.Name, test.ShouldEqual, exp.Name)
-	test.That(t, result.FrameConfig, test.ShouldResemble, exp.FrameConfig)
+	test.That(t, result.PoseInParentFrame, test.ShouldResemble, exp.PoseInParentFrame)
 	test.That(t, result.ModelJson, test.ShouldResemble, exp.ModelJson)
 	// return to FrameSystemPart
 	partAgain, err := ProtobufToFrameSystemPart(result)
@@ -69,12 +71,15 @@ func TestFrameModelPart(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	pose = &commonpb.Pose{X: 1, Y: 2, Z: 3, OZ: 1, Theta: 0}
 	exp = &servicepb.Config{
-		Name:        "test",
-		FrameConfig: &servicepb.FrameConfig{Parent: "world", Pose: pose},
-		ModelJson:   jsonData,
+		Name: "test",
+		PoseInParentFrame: &commonpb.PoseInFrame{
+			ReferenceFrame: "world",
+			Pose:           pose,
+		},
+		ModelJson: jsonData,
 	}
 	test.That(t, result.Name, test.ShouldEqual, exp.Name)
-	test.That(t, result.FrameConfig, test.ShouldResemble, exp.FrameConfig)
+	test.That(t, result.PoseInParentFrame, test.ShouldResemble, exp.PoseInParentFrame)
 	test.That(t, result.ModelJson, test.ShouldNotBeNil)
 	// return to FrameSystemPart
 	partAgain, err = ProtobufToFrameSystemPart(result)
@@ -129,4 +134,56 @@ func TestFramesFromPart(t *testing.T) {
 	test.That(t, modelFrame.DoF(), test.ShouldResemble, part.ModelFrame.DoF())
 	test.That(t, offsetFrame.Name(), test.ShouldEqual, part.Name+"_offset")
 	test.That(t, offsetFrame.DoF(), test.ShouldHaveLength, 0)
+}
+
+func TestConvertTransformProtobufToFrameSystemPart(t *testing.T) {
+	zeroPose := spatial.PoseToProtobuf(spatial.NewZeroPose())
+	t.Run("fails on missing reference frame name", func(t *testing.T) {
+		transform := &commonpb.Transform{
+			PoseInObserverFrame: &commonpb.PoseInFrame{
+				ReferenceFrame: "parent",
+				Pose:           zeroPose,
+			},
+		}
+		part, err := ConvertTransformProtobufToFrameSystemPart(transform)
+		test.That(t, err, test.ShouldBeError, NewMissingReferenceFrameError(&commonpb.Transform{}))
+		test.That(t, part, test.ShouldBeNil)
+	})
+	t.Run("fails on missing reference frame name", func(t *testing.T) {
+		transform := &commonpb.Transform{
+			ReferenceFrame: "child",
+			PoseInObserverFrame: &commonpb.PoseInFrame{
+				Pose: zeroPose,
+			},
+		}
+		part, err := ConvertTransformProtobufToFrameSystemPart(transform)
+		test.That(t, err, test.ShouldBeError, NewMissingReferenceFrameError(&commonpb.PoseInFrame{}))
+		test.That(t, part, test.ShouldBeNil)
+	})
+	t.Run("converts to frame system part", func(t *testing.T) {
+		testPose := spatial.NewPoseFromAxisAngle(
+			r3.Vector{X: 1., Y: 2., Z: 3.},
+			r3.Vector{X: 0., Y: 1., Z: 0.},
+			math.Pi/2,
+		)
+		transform := &commonpb.Transform{
+			ReferenceFrame: "child",
+			PoseInObserverFrame: &commonpb.PoseInFrame{
+				ReferenceFrame: "parent",
+				Pose:           spatial.PoseToProtobuf(testPose),
+			},
+		}
+		transformPOF := transform.GetPoseInObserverFrame()
+		posePt := testPose.Point()
+		part, err := ConvertTransformProtobufToFrameSystemPart(transform)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, part.Name, test.ShouldEqual, transform.GetReferenceFrame())
+		test.That(t, part.FrameConfig.Parent, test.ShouldEqual, transformPOF.GetReferenceFrame())
+		partTrans := part.FrameConfig.Translation
+		partOrient := part.FrameConfig.Orientation
+		test.That(t, partTrans.X, test.ShouldAlmostEqual, posePt.X)
+		test.That(t, partTrans.Y, test.ShouldAlmostEqual, posePt.Y)
+		test.That(t, partTrans.Z, test.ShouldAlmostEqual, posePt.Z)
+		test.That(t, spatial.OrientationAlmostEqual(partOrient, testPose.Orientation()), test.ShouldBeTrue)
+	})
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
 
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/component/imu"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/registry"
@@ -41,6 +42,7 @@ func NewIMU(cfg config.Component) (imu.IMU, error) {
 		angularVelocity: spatialmath.AngularVelocity{X: 1, Y: 2, Z: 3},
 		orientation:     spatialmath.EulerAngles{Roll: utils.DegToRad(1), Pitch: utils.DegToRad(2), Yaw: utils.DegToRad(3)},
 		acceleration:    r3.Vector{X: 1, Y: 2, Z: 3},
+		magnetometer:    r3.Vector{X: 1, Y: 2, Z: 3},
 	}, nil
 }
 
@@ -50,8 +52,10 @@ type IMU struct {
 	angularVelocity spatialmath.AngularVelocity
 	orientation     spatialmath.EulerAngles
 	acceleration    r3.Vector
+	magnetometer    r3.Vector
 
 	mu sync.Mutex
+	generic.Echo
 }
 
 // ReadAngularVelocity always returns the set value.
@@ -73,4 +77,11 @@ func (i *IMU) ReadAcceleration(ctx context.Context) (r3.Vector, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.acceleration, nil
+}
+
+// ReadMagnetometer always returns the set value.
+func (i *IMU) ReadMagnetometer(ctx context.Context) (r3.Vector, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.magnetometer, nil
 }

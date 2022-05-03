@@ -13,6 +13,7 @@ import (
 	_ "embed"
 	"fmt"
 	"image"
+	"io"
 	"io/ioutil"
 	"net/http"
 
@@ -34,7 +35,8 @@ import (
 func init() {
 	registry.RegisterComponent(camera.Subtype, "single_stream",
 		registry.Component{Constructor: func(ctx context.Context, r robot.Robot,
-			config config.Component, logger golog.Logger) (interface{}, error) {
+			config config.Component, logger golog.Logger,
+		) (interface{}, error) {
 			attrs, ok := config.ConvertedAttributes.(*ServerAttrs)
 			if !ok {
 				return nil, utils.NewUnexpectedTypeError(attrs, config.ConvertedAttributes)
@@ -42,7 +44,7 @@ func init() {
 			return NewServerSource(attrs, logger)
 		}})
 
-	config.RegisterComponentAttributeMapConverter(config.ComponentTypeCamera, "single_stream",
+	config.RegisterComponentAttributeMapConverter(camera.SubtypeName, "single_stream",
 		func(attributes config.AttributeMap) (interface{}, error) {
 			cameraAttrs, err := camera.CommonCameraAttributes(attributes)
 			if err != nil {
@@ -64,7 +66,8 @@ func init() {
 
 	registry.RegisterComponent(camera.Subtype, "dual_stream",
 		registry.Component{Constructor: func(ctx context.Context, r robot.Robot,
-			config config.Component, logger golog.Logger) (interface{}, error) {
+			config config.Component, logger golog.Logger,
+		) (interface{}, error) {
 			attrs, ok := config.ConvertedAttributes.(*dualServerAttrs)
 			if !ok {
 				return nil, utils.NewUnexpectedTypeError(attrs, config.ConvertedAttributes)
@@ -72,7 +75,7 @@ func init() {
 			return newDualServerSource(attrs)
 		}})
 
-	config.RegisterComponentAttributeMapConverter(config.ComponentTypeCamera, "dual_stream",
+	config.RegisterComponentAttributeMapConverter(camera.SubtypeName, "dual_stream",
 		func(attributes config.AttributeMap) (interface{}, error) {
 			cameraAttrs, err := camera.CommonCameraAttributes(attributes)
 			if err != nil {
@@ -94,7 +97,8 @@ func init() {
 
 	registry.RegisterComponent(camera.Subtype, "file",
 		registry.Component{Constructor: func(ctx context.Context, r robot.Robot,
-			config config.Component, logger golog.Logger) (interface{}, error) {
+			config config.Component, logger golog.Logger,
+		) (interface{}, error) {
 			attrs, ok := config.ConvertedAttributes.(*fileSourceAttrs)
 			if !ok {
 				return nil, utils.NewUnexpectedTypeError(attrs, config.ConvertedAttributes)
@@ -103,7 +107,7 @@ func init() {
 			return camera.New(imgSrc, attrs.AttrConfig, nil)
 		}})
 
-	config.RegisterComponentAttributeMapConverter(config.ComponentTypeCamera, "file",
+	config.RegisterComponentAttributeMapConverter(camera.SubtypeName, "file",
 		func(attributes config.AttributeMap) (interface{}, error) {
 			cameraAttrs, err := camera.CommonCameraAttributes(attributes)
 			if err != nil {
@@ -149,8 +153,13 @@ type fileSourceAttrs struct {
 	Aligned bool   `json:"aligned"`
 }
 
-// Next returns the image stored in the color and depth files as an ImageWithDepth.
+// Next returns the image stored in the color and depth files as an ImageWithDepth, or just an Image
+// if Depth is not available.
 func (fs *fileSource) Next(ctx context.Context) (image.Image, func(), error) {
+	if fs.DepthFN == "" { // no depth info
+		img, err := rimage.NewImageFromFile(fs.ColorFN)
+		return img, func() {}, err
+	}
 	img, err := rimage.NewImageWithDepth(fs.ColorFN, fs.DepthFN, fs.isAligned)
 	return img, func() {}, err
 }
@@ -164,11 +173,7 @@ func decodeDepth(depthData []byte) (*rimage.DepthMap, error) {
 	return rimage.ReadDepthMap(bufio.NewReader(bytes.NewReader(depthData)))
 }
 
-func decodeBoth(bothData []byte, aligned bool) (*rimage.ImageWithDepth, error) {
-	return rimage.ReadBothFromBytes(bothData, aligned)
-}
-
-func readyBytesFromURL(ctx context.Context, client http.Client, url string) ([]byte, error) {
+func prepReadFromURL(ctx context.Context, client http.Client, url string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -177,11 +182,19 @@ func readyBytesFromURL(ctx context.Context, client http.Client, url string) ([]b
 	if err != nil {
 		return nil, err
 	}
+	return resp.Body, nil
+}
+
+func readyBytesFromURL(ctx context.Context, client http.Client, url string) ([]byte, error) {
+	body, err := prepReadFromURL(ctx, client, url)
+	if err != nil {
+		return nil, err
+	}
 
 	defer func() {
-		viamutils.UncheckedError(resp.Body.Close())
+		viamutils.UncheckedError(body.Close())
 	}()
-	return ioutil.ReadAll(resp.Body)
+	return ioutil.ReadAll(body)
 }
 
 // dualServerSource stores two URLs, one which points the color source and the other to the
@@ -272,26 +285,29 @@ func (s *serverSource) Next(ctx context.Context) (image.Image, func(), error) {
 	var img *rimage.ImageWithDepth
 	var err error
 
-	allData, err := readyBytesFromURL(ctx, s.client, s.URL)
+	in, err := prepReadFromURL(ctx, s.client, s.URL)
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "couldn't read url (%s)", s.URL)
 	}
+	defer func() {
+		viamutils.UncheckedError(in.Close())
+	}()
 
 	switch s.stream {
 	case camera.ColorStream:
-		color, err := decodeColor(allData)
+		color, _, err := image.Decode(in)
 		if err != nil {
 			return nil, nil, err
 		}
 		img = rimage.MakeImageWithDepth(rimage.ConvertImage(color), nil, false)
 	case camera.DepthStream:
-		depth, err := decodeDepth(allData)
+		depth, err := rimage.ReadDepthMap(bufio.NewReader(in))
 		if err != nil {
 			return nil, nil, err
 		}
-		img = rimage.MakeImageWithDepth(rimage.ConvertImage(depth.ToGray16Picture()), depth, true)
+		return depth, func() {}, nil
 	case camera.BothStream:
-		img, err = decodeBoth(allData, s.isAligned)
+		img, err = rimage.ReadBothFromReader(bufio.NewReader(in), s.isAligned)
 		if err != nil {
 			return nil, nil, err
 		}

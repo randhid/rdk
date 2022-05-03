@@ -6,14 +6,16 @@ import (
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/component/gantry"
+	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/referenceframe"
 )
 
 // Gantry is an injected gantry.
 type Gantry struct {
 	gantry.Gantry
+	DoFunc             func(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error)
 	GetPositionFunc    func(ctx context.Context) ([]float64, error)
-	MoveToPositionFunc func(ctx context.Context, positions []float64, obstacles []*referenceframe.GeometriesInFrame) error
+	MoveToPositionFunc func(ctx context.Context, positions []float64, worldState *commonpb.WorldState) error
 	GetLengthsFunc     func(ctx context.Context) ([]float64, error)
 	CloseFunc          func(ctx context.Context) error
 	ModelFrameFunc     func() referenceframe.Model
@@ -28,11 +30,11 @@ func (a *Gantry) GetPosition(ctx context.Context) ([]float64, error) {
 }
 
 // MoveToPosition calls the injected MoveToPosition or the real version.
-func (a *Gantry) MoveToPosition(ctx context.Context, positions []float64, obstacles []*referenceframe.GeometriesInFrame) error {
+func (a *Gantry) MoveToPosition(ctx context.Context, positions []float64, worldState *commonpb.WorldState) error {
 	if a.MoveToPositionFunc == nil {
-		return a.Gantry.MoveToPosition(ctx, positions, obstacles)
+		return a.Gantry.MoveToPosition(ctx, positions, worldState)
 	}
-	return a.MoveToPositionFunc(ctx, positions, obstacles)
+	return a.MoveToPositionFunc(ctx, positions, worldState)
 }
 
 // GetLengths calls the injected GetLengths or the real version.
@@ -57,4 +59,12 @@ func (a *Gantry) Close(ctx context.Context) error {
 		return utils.TryClose(ctx, a.Gantry)
 	}
 	return a.CloseFunc(ctx)
+}
+
+// Do calls the injected Do or the real version.
+func (a *Gantry) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	if a.DoFunc == nil {
+		return a.Gantry.Do(ctx, cmd)
+	}
+	return a.DoFunc(ctx, cmd)
 }

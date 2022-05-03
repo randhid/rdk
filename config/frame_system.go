@@ -29,12 +29,15 @@ func (part *FrameSystemPart) ToProtobuf() (*pb.Config, error) {
 		X:     pose.X,
 		Y:     pose.Y,
 		Z:     pose.Z,
-		OX:    pose.OY,
+		OX:    pose.OX,
 		OY:    pose.OY,
 		OZ:    pose.OZ,
 		Theta: pose.Theta,
 	}
-	frameConfig := &pb.FrameConfig{Parent: part.FrameConfig.Parent, Pose: convertedPose}
+	poseInFrame := &commonpb.PoseInFrame{
+		ReferenceFrame: part.FrameConfig.Parent,
+		Pose:           convertedPose,
+	}
 	var modelJSON []byte
 	var err error
 	if part.ModelFrame != nil {
@@ -44,28 +47,29 @@ func (part *FrameSystemPart) ToProtobuf() (*pb.Config, error) {
 		}
 	}
 	return &pb.Config{
-		Name:        part.Name,
-		FrameConfig: frameConfig,
-		ModelJson:   modelJSON,
+		Name:              part.Name,
+		PoseInParentFrame: poseInFrame,
+		ModelJson:         modelJSON,
 	}, nil
 }
 
 // ProtobufToFrameSystemPart takes a protobuf object and transforms it into a FrameSystemPart.
 func ProtobufToFrameSystemPart(fsc *pb.Config) (*FrameSystemPart, error) {
+	poseMsg := fsc.PoseInParentFrame.Pose
 	convertedPose := &commonpb.Pose{
-		X:     fsc.FrameConfig.Pose.X,
-		Y:     fsc.FrameConfig.Pose.Y,
-		Z:     fsc.FrameConfig.Pose.Z,
-		OX:    fsc.FrameConfig.Pose.OY,
-		OY:    fsc.FrameConfig.Pose.OY,
-		OZ:    fsc.FrameConfig.Pose.OZ,
-		Theta: fsc.FrameConfig.Pose.Theta,
+		X:     poseMsg.X,
+		Y:     poseMsg.Y,
+		Z:     poseMsg.Z,
+		OX:    poseMsg.OX,
+		OY:    poseMsg.OY,
+		OZ:    poseMsg.OZ,
+		Theta: poseMsg.Theta,
 	}
 	pose := spatialmath.NewPoseFromProtobuf(convertedPose)
 	point := pose.Point()
 	translation := spatialmath.TranslationConfig{X: point.X, Y: point.Y, Z: point.Z}
 	frameConfig := &Frame{
-		Parent:      fsc.FrameConfig.Parent,
+		Parent:      fsc.PoseInParentFrame.ReferenceFrame,
 		Translation: translation,
 		Orientation: pose.Orientation(),
 	}
@@ -81,6 +85,40 @@ func ProtobufToFrameSystemPart(fsc *pb.Config) (*FrameSystemPart, error) {
 		return nil, err
 	}
 	part.ModelFrame = modelFrame
+	return part, nil
+}
+
+// NewMissingReferenceFrameError returns an error indicating that a particular
+// protobuf message is missing necessary information for its ReferenceFrame key.
+func NewMissingReferenceFrameError(msg interface{}) error {
+	return errors.Errorf("missing reference frame in protobuf message of type %T", msg)
+}
+
+// ConvertTransformProtobufToFrameSystemPart creates a FrameSystem part out of a
+// transform protobuf message.
+func ConvertTransformProtobufToFrameSystemPart(transformMsg *commonpb.Transform) (*FrameSystemPart, error) {
+	frameName := transformMsg.GetReferenceFrame()
+	if frameName == "" {
+		return nil, NewMissingReferenceFrameError(transformMsg)
+	}
+	poseInObserverFrame := transformMsg.GetPoseInObserverFrame()
+	parentFrame := poseInObserverFrame.GetReferenceFrame()
+	if parentFrame == "" {
+		return nil, NewMissingReferenceFrameError(poseInObserverFrame)
+	}
+	poseMsg := poseInObserverFrame.GetPose()
+	pose := spatialmath.NewPoseFromProtobuf(poseMsg)
+	point := pose.Point()
+	translation := spatialmath.NewTranslationConfig(point)
+	frameConfig := &Frame{
+		Parent:      parentFrame,
+		Translation: *translation,
+		Orientation: pose.Orientation(),
+	}
+	part := &FrameSystemPart{
+		Name:        frameName,
+		FrameConfig: frameConfig,
+	}
 	return part, nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/edaniels/golog"
 	"github.com/edaniels/gostream"
+	"go.opencensus.io/trace"
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/component/camera"
@@ -41,7 +42,7 @@ func init() {
 			return camera.New(source, attrs, source)
 		}})
 
-	config.RegisterComponentAttributeMapConverter(config.ComponentTypeCamera, "identity",
+	config.RegisterComponentAttributeMapConverter(camera.SubtypeName, "identity",
 		func(attributes config.AttributeMap) (interface{}, error) {
 			var conf camera.AttrConfig
 			return config.TransformAttributeMapToStruct(&conf, attributes)
@@ -70,7 +71,7 @@ func init() {
 			return camera.New(imgSrc, attrs, source)
 		}})
 
-	config.RegisterComponentAttributeMapConverter(config.ComponentTypeCamera, "rotate",
+	config.RegisterComponentAttributeMapConverter(camera.SubtypeName, "rotate",
 		func(attributes config.AttributeMap) (interface{}, error) {
 			var conf camera.AttrConfig
 			return config.TransformAttributeMapToStruct(&conf, attributes)
@@ -109,7 +110,7 @@ func init() {
 			return camera.New(imgSrc, attrs, nil) // camera parameters from source camera do not work for resized images
 		}})
 
-	config.RegisterComponentAttributeMapConverter(config.ComponentTypeCamera, "resize",
+	config.RegisterComponentAttributeMapConverter(camera.SubtypeName, "resize",
 		func(attributes config.AttributeMap) (interface{}, error) {
 			var conf camera.AttrConfig
 			return config.TransformAttributeMapToStruct(&conf, attributes)
@@ -124,6 +125,8 @@ type rotateImageDepthSource struct {
 
 // Next TODO.
 func (rids *rotateImageDepthSource) Next(ctx context.Context) (image.Image, func(), error) {
+	ctx, span := trace.StartSpan(ctx, "camera::imagesource::rotate::Next")
+	defer span.End()
 	orig, release, err := rids.Original.Next(ctx)
 	if err != nil {
 		return nil, nil, err

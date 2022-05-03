@@ -20,6 +20,9 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"go.viam.com/utils"
+	"go.viam.com/utils/artifact"
+
+	"go.viam.com/rdk/resource"
 )
 
 // RDK versioning variables which are replaced by LD flags.
@@ -39,19 +42,19 @@ type AttributeMapConverter func(attributes AttributeMap) (interface{}, error)
 // A ComponentAttributeConverterRegistration describes how to convert a specific attribute
 // for a model of a type of component.
 type ComponentAttributeConverterRegistration struct {
-	CompType ComponentType
-	Model    string
-	Attr     string
-	Conv     AttributeConverter
+	Subtype resource.SubtypeName
+	Model   string
+	Attr    string
+	Conv    AttributeConverter
 }
 
 // A ComponentAttributeMapConverterRegistration describes how to convert all attributes
 // for a model of a type of component.
 type ComponentAttributeMapConverterRegistration struct {
-	CompType ComponentType
-	Model    string
-	Conv     AttributeMapConverter
-	RetType  interface{} // the shape of what is converted to
+	Subtype resource.SubtypeName
+	Model   string
+	Conv    AttributeMapConverter
+	RetType interface{} // the shape of what is converted to
 }
 
 // A ServiceAttributeMapConverterRegistration describes how to convert all attributes
@@ -70,18 +73,18 @@ var (
 
 // RegisterComponentAttributeConverter associates a component type and model with a way to convert a
 // particular attribute name.
-func RegisterComponentAttributeConverter(compType ComponentType, model, attr string, conv AttributeConverter) {
-	componentAttributeConverters = append(componentAttributeConverters, ComponentAttributeConverterRegistration{compType, model, attr, conv})
+func RegisterComponentAttributeConverter(subtype resource.SubtypeName, model, attr string, conv AttributeConverter) {
+	componentAttributeConverters = append(componentAttributeConverters, ComponentAttributeConverterRegistration{subtype, model, attr, conv})
 }
 
 // RegisterComponentAttributeMapConverter associates a component type and model with a way to convert all attributes.
-func RegisterComponentAttributeMapConverter(compType ComponentType, model string, conv AttributeMapConverter, retType interface{}) {
+func RegisterComponentAttributeMapConverter(subtype resource.SubtypeName, model string, conv AttributeMapConverter, retType interface{}) {
 	if retType == nil {
 		panic("retType should not be nil")
 	}
 	componentAttributeMapConverters = append(
 		componentAttributeMapConverters,
-		ComponentAttributeMapConverterRegistration{compType, model, conv, retType},
+		ComponentAttributeMapConverterRegistration{subtype, model, conv, retType},
 	)
 }
 
@@ -160,18 +163,18 @@ func RegisteredServiceAttributeMapConverters() []ServiceAttributeMapConverterReg
 	return copied.([]ServiceAttributeMapConverterRegistration)
 }
 
-func findConverter(compType ComponentType, model, attr string) AttributeConverter {
+func findConverter(subtype resource.SubtypeName, model, attr string) AttributeConverter {
 	for _, r := range componentAttributeConverters {
-		if r.CompType == compType && r.Model == model && r.Attr == attr {
+		if r.Subtype == subtype && r.Model == model && r.Attr == attr {
 			return r.Conv
 		}
 	}
 	return nil
 }
 
-func findMapConverter(compType ComponentType, model string) AttributeMapConverter {
+func findMapConverter(subtype resource.SubtypeName, model string) AttributeMapConverter {
 	for _, r := range componentAttributeMapConverters {
-		if r.CompType == compType && r.Model == model {
+		if r.Subtype == subtype && r.Model == model {
 			return r.Conv
 		}
 	}
@@ -262,17 +265,21 @@ func storeToCache(id string, cfg *Config) error {
 	if err := os.MkdirAll(viamDotDir, 0o700); err != nil {
 		return err
 	}
+
 	md, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	//nolint:gosec
-	return ioutil.WriteFile(getCloudCacheFilePath(id), md, 0o640)
+	reader := bytes.NewReader(md)
+
+	path := getCloudCacheFilePath(id)
+
+	return artifact.AtomicStore(path, reader, id)
 }
 
-// ReadFromCloud fetches a robot config from the cloud based
+// readFromCloud fetches a robot config from the cloud based
 // on the given config.
-func ReadFromCloud(
+func readFromCloud(
 	ctx context.Context,
 	cloudCfg *Cloud,
 	readFromCache bool,
@@ -376,15 +383,17 @@ func ReadFromCloud(
 				return nil, nil, errors.Wrap(err, "error decoding certificate data from cloud; try again later")
 			}
 
-			if certData.TLSCertificate == "" {
-				return nil, nil, errors.New("no TLS certificate yet from cloud; try again later")
-			}
-			if certData.TLSPrivateKey == "" {
-				return nil, nil, errors.New("no TLS private key yet from cloud; try again later")
-			}
+			if !certData.SignalingInsecure {
+				if certData.TLSCertificate == "" {
+					return nil, nil, errors.New("no TLS certificate yet from cloud; try again later")
+				}
+				if certData.TLSPrivateKey == "" {
+					return nil, nil, errors.New("no TLS private key yet from cloud; try again later")
+				}
 
-			tlsCertificate = certData.TLSCertificate
-			tlsPrivateKey = certData.TLSPrivateKey
+				tlsCertificate = certData.TLSCertificate
+				tlsPrivateKey = certData.TLSPrivateKey
+			}
 		} else {
 			var urlErr *url.Error
 			if !errors.Is(err, context.DeadlineExceeded) && (!errors.As(err, &urlErr) || urlErr.Temporary()) {
@@ -462,7 +471,7 @@ func fromReader(
 	cfg := Config{
 		ConfigFilePath: originalPath,
 	}
-	unprocessedCfg := Config{
+	unprocessedConfig := Config{
 		ConfigFilePath: originalPath,
 	}
 
@@ -473,18 +482,18 @@ func fromReader(
 	if err := json.Unmarshal(rd, &cfg); err != nil {
 		return nil, nil, errors.Wrap(err, "cannot parse config")
 	}
-	if err := json.Unmarshal(rd, &unprocessedCfg); err != nil {
+	if err := json.Unmarshal(rd, &unprocessedConfig); err != nil {
 		return nil, nil, errors.Wrap(err, "cannot parse config")
 	}
 	if err := cfg.Ensure(skipCloud); err != nil {
 		return nil, nil, err
 	}
-	if err := unprocessedCfg.Ensure(skipCloud); err != nil {
+	if err := unprocessedConfig.Ensure(skipCloud); err != nil {
 		return nil, nil, err
 	}
 
 	if !skipCloud && cfg.Cloud != nil {
-		return ReadFromCloud(ctx, cfg.Cloud, true, true, logger)
+		return readFromCloud(ctx, cfg.Cloud, true, true, logger)
 	}
 
 	for idx, c := range cfg.Components {
@@ -531,5 +540,5 @@ func fromReader(
 	if err := cfg.Ensure(skipCloud); err != nil {
 		return nil, nil, err
 	}
-	return &cfg, &unprocessedCfg, nil
+	return &cfg, &unprocessedConfig, nil
 }

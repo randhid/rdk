@@ -47,7 +47,7 @@
             "type": "board",
             "attributes":
             {
-                "digitalInterrupts":
+                "digital_interrupts":
                 [
                     {
                         "name": "encoder2",
@@ -79,19 +79,6 @@
                 "trap \"exit 0\" SIGINT; while true; do echo world; sleep 2; done"
             ],
             "log": true
-        }
-    ],
-    "functions":
-    [
-        {
-            "name": "func1",
-            "engine": "foo",
-            "source": "1+1"
-        },
-        {
-            "name": "func3",
-            "engine": "baz",
-            "source": "3"
         }
     ]
 }

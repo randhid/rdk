@@ -42,6 +42,19 @@ func setupInjectRobot() *inject.Robot {
 	return r
 }
 
+func TestGenericDo(t *testing.T) {
+	r := setupInjectRobot()
+
+	i, err := imu.FromRobot(r, testIMUName)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, i, test.ShouldNotBeNil)
+
+	command := map[string]interface{}{"cmd": "test", "data1": 500}
+	ret, err := i.Do(context.Background(), command)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, ret, test.ShouldEqual, command)
+}
+
 func TestFromRobot(t *testing.T) {
 	r := setupInjectRobot()
 
@@ -79,7 +92,6 @@ func TestIMUName(t *testing.T) {
 			"missing name",
 			"",
 			resource.Name{
-				UUID: "053e1e0c-20de-59e7-bace-922cb1ada629",
 				Subtype: resource.Subtype{
 					Type:            resource.Type{Namespace: resource.ResourceNamespaceRDK, ResourceType: resource.ResourceTypeComponent},
 					ResourceSubtype: imu.SubtypeName,
@@ -91,7 +103,6 @@ func TestIMUName(t *testing.T) {
 			"all fields included",
 			testIMUName,
 			resource.Name{
-				UUID: "aed67198-6075-5806-837a-6d33ee4b5a42",
 				Subtype: resource.Subtype{
 					Type:            resource.Type{Namespace: resource.ResourceNamespaceRDK, ResourceType: resource.ResourceTypeComponent},
 					ResourceSubtype: imu.SubtypeName,
@@ -111,6 +122,7 @@ var (
 	av = spatialmath.AngularVelocity{X: 1, Y: 2, Z: 3}
 	ea = &spatialmath.EulerAngles{Roll: 4, Pitch: 5, Yaw: 6}
 	ac = r3.Vector{X: 7, Y: 8, Z: 9}
+	mg = r3.Vector{X: 10, Y: 11, Z: 12}
 
 	readings = []interface{}{5.6, 6.4}
 )
@@ -189,13 +201,29 @@ func TestReadAcceleration(t *testing.T) {
 	test.That(t, actualIMU1.accelerationCount, test.ShouldEqual, 1)
 }
 
+func TestReadMagnetometer(t *testing.T) {
+	actualIMU1 := &mock{Name: testIMUName}
+	reconfIMU1, _ := imu.WrapWithReconfigurable(actualIMU1)
+
+	test.That(t, actualIMU1.magnetometerCount, test.ShouldEqual, 0)
+	mag, err := reconfIMU1.(imu.IMU).ReadMagnetometer(context.Background())
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, mag, test.ShouldResemble, r3.Vector{X: 10, Y: 11, Z: 12})
+	test.That(t, actualIMU1.magnetometerCount, test.ShouldEqual, 1)
+}
+
 func TestGetReadings(t *testing.T) {
 	actualIMU1 := &mock{Name: testIMUName}
 	reconfIMU1, _ := imu.WrapWithReconfigurable(actualIMU1)
 
 	readings1, err := imu.GetReadings(context.Background(), actualIMU1)
 	test.That(t, err, test.ShouldBeNil)
-	test.That(t, readings1, test.ShouldResemble, []interface{}{av.X, av.Y, av.Z, ea.Roll, ea.Pitch, ea.Yaw, ac.X, ac.Y, ac.Z})
+	test.That(t, readings1, test.ShouldResemble, []interface{}{
+		av.X, av.Y, av.Z,
+		ea.Roll, ea.Pitch, ea.Yaw,
+		ac.X, ac.Y, ac.Z,
+		mg.X, mg.Y, mg.Z,
+	})
 
 	result, err := reconfIMU1.(sensor.Sensor).GetReadings(context.Background())
 	test.That(t, err, test.ShouldBeNil)
@@ -217,6 +245,7 @@ type mock struct {
 	angularVelocityCount int
 	orientationCount     int
 	accelerationCount    int
+	magnetometerCount    int
 	reconfCount          int
 }
 
@@ -235,7 +264,16 @@ func (m *mock) ReadAcceleration(ctx context.Context) (r3.Vector, error) {
 	return ac, nil
 }
 
+func (m *mock) ReadMagnetometer(ctx context.Context) (r3.Vector, error) {
+	m.magnetometerCount++
+	return mg, nil
+}
+
 func (m *mock) Close() { m.reconfCount++ }
+
+func (m *mock) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	return cmd, nil
+}
 
 type mockWithSensor struct {
 	mock

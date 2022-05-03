@@ -12,7 +12,8 @@ import (
 	"github.com/edaniels/golog"
 	"github.com/matttproud/golang_protobuf_extensions/pbutil"
 	"github.com/pkg/errors"
-	"golang.org/x/sync/errgroup"
+	"go.opencensus.io/trace"
+	"go.viam.com/utils"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -43,16 +44,17 @@ type Collector interface {
 }
 
 type collector struct {
-	queue     chan *v1.SensorData
-	interval  time.Duration
-	params    map[string]string
-	lock      *sync.Mutex
-	logger    golog.Logger
-	target    *os.File
-	writer    *bufio.Writer
-	cancelCtx context.Context
-	cancel    context.CancelFunc
-	capturer  Capturer
+	queue             chan *v1.SensorData
+	interval          time.Duration
+	params            map[string]string
+	lock              *sync.Mutex
+	logger            golog.Logger
+	target            *os.File
+	writer            *bufio.Writer
+	backgroundWorkers sync.WaitGroup
+	cancelCtx         context.Context
+	cancel            context.CancelFunc
+	capturer          Capturer
 }
 
 // SetTarget updates the file being written to by the collector.
@@ -80,50 +82,109 @@ func (c *collector) Close() {
 	defer c.lock.Unlock()
 
 	c.cancel()
+	c.backgroundWorkers.Wait()
 	if err := c.writer.Flush(); err != nil {
 		c.logger.Errorw("failed to flush writer to disk", "error", err)
 	}
 }
 
-// Collect starts the Collector, causing it to run c.capture every c.interval, and write the results to c.target.
+// Collect starts the Collector, causing it to run c.capturer.Capture every c.interval, and write the results to
+// c.target.
 func (c *collector) Collect() error {
-	errs, _ := errgroup.WithContext(c.cancelCtx)
-	go c.capture()
-	errs.Go(func() error {
-		return c.write()
-	})
-	return errs.Wait()
+	_, span := trace.StartSpan(c.cancelCtx, "data::collector::Collect")
+	defer span.End()
+
+	utils.PanicCapturingGo(c.capture)
+	return c.write()
 }
 
+// Go's time.Ticker has inconsistent performance with durations of below 1ms [0], so we use a time.Sleep based approach
+// when the configured capture interval is below 2ms. A Ticker based approach is kept for longer capture intervals to
+// avoid wasting CPU on a thread that's idling for the vast majority of the time.
+// [0]: https://www.mail-archive.com/golang-nuts@googlegroups.com/msg46002.html
 func (c *collector) capture() {
-	ticker := time.NewTicker(c.interval)
-	defer ticker.Stop()
-	var wg sync.WaitGroup
+	if c.interval < time.Millisecond*2 {
+		c.sleepBasedCapture()
+	} else {
+		c.tickerBasedCapture()
+	}
+}
 
+func (c *collector) sleepBasedCapture() {
+	next := time.Now().Add(c.interval)
 	for {
+		time.Sleep(time.Until(next))
+		if err := c.cancelCtx.Err(); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				c.logger.Errorw("unexpected error in collector context", "error", err)
+			}
+			c.backgroundWorkers.Wait()
+			close(c.queue)
+			return
+		}
+
 		select {
 		case <-c.cancelCtx.Done():
-			wg.Wait()
+			c.backgroundWorkers.Wait()
+			close(c.queue)
+			return
+		default:
+			c.lock.Lock()
+			c.backgroundWorkers.Add(1)
+			c.lock.Unlock()
+			utils.PanicCapturingGo(func() {
+				c.getAndPushNextReading()
+			})
+		}
+		next = next.Add(c.interval)
+	}
+}
+
+func (c *collector) tickerBasedCapture() {
+	ticker := time.NewTicker(c.interval)
+	defer ticker.Stop()
+
+	for {
+		if err := c.cancelCtx.Err(); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				c.logger.Errorw("unexpected error in collector context", "error", err)
+			}
+			c.backgroundWorkers.Wait()
+			close(c.queue)
+			return
+		}
+
+		select {
+		case <-c.cancelCtx.Done():
+			c.backgroundWorkers.Wait()
 			close(c.queue)
 			return
 		case <-ticker.C:
-			wg.Add(1)
-			go c.getAndPushNextReading(&wg)
+			c.lock.Lock()
+			c.backgroundWorkers.Add(1)
+			c.lock.Unlock()
+			utils.PanicCapturingGo(func() {
+				c.getAndPushNextReading()
+			})
 		}
 	}
 }
 
-func (c *collector) getAndPushNextReading(wg *sync.WaitGroup) {
-	defer wg.Done()
+func (c *collector) getAndPushNextReading() {
+	defer c.backgroundWorkers.Done()
 
 	timeRequested := timestamppb.New(time.Now().UTC())
 	reading, err := c.capturer.Capture(c.cancelCtx, c.params)
 	timeReceived := timestamppb.New(time.Now().UTC())
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			c.logger.Debugw("error while capturing data", "error", err)
+			return
+		}
 		c.logger.Errorw("error while capturing data", "error", err)
 		return
 	}
-	pbReading, err := InterfaceToStruct(reading)
+	pbReading, err := StructToStructPb(reading)
 	if err != nil {
 		c.logger.Errorw("error while converting reading to structpb.Struct", "error", err)
 		return
@@ -135,8 +196,9 @@ func (c *collector) getAndPushNextReading(wg *sync.WaitGroup) {
 		},
 		Data: pbReading,
 	}
+
 	select {
-	// If c.queue is full, c.queue <- a can block indefinitely. This additional select block allows cancel to
+	// If c.qgitueue is full, c.queue <- a can block indefinitely. This additional select block allows cancel to
 	// still work when this happens.
 	case <-c.cancelCtx.Done():
 		return
@@ -151,16 +213,17 @@ func NewCollector(capturer Capturer, interval time.Duration, params map[string]s
 	bufferSize int, logger golog.Logger) Collector {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	return &collector{
-		queue:     make(chan *v1.SensorData, queueSize),
-		interval:  interval,
-		params:    params,
-		lock:      &sync.Mutex{},
-		logger:    logger,
-		target:    target,
-		writer:    bufio.NewWriterSize(target, bufferSize),
-		cancelCtx: cancelCtx,
-		cancel:    cancelFunc,
-		capturer:  capturer,
+		queue:             make(chan *v1.SensorData, queueSize),
+		interval:          interval,
+		params:            params,
+		lock:              &sync.Mutex{},
+		logger:            logger,
+		target:            target,
+		writer:            bufio.NewWriterSize(target, bufferSize),
+		cancelCtx:         cancelCtx,
+		cancel:            cancelFunc,
+		backgroundWorkers: sync.WaitGroup{},
+		capturer:          capturer,
 	}
 }
 
@@ -183,16 +246,16 @@ func (c *collector) appendMessage(msg *v1.SensorData) error {
 	return nil
 }
 
-// InterfaceToStruct converts an arbitrary Go struct to a *structpb.Struct. Only exported fields are included in the
+// StructToStructPb converts an arbitrary Go struct to a *structpb.Struct. Only exported fields are included in the
 // returned proto.
-func InterfaceToStruct(i interface{}) (*structpb.Struct, error) {
+func StructToStructPb(i interface{}) (*structpb.Struct, error) {
 	encoded, err := protoutils.InterfaceToMap(i)
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to convert interface %v to a form acceptable to structpb.NewStruct", i)
+		return nil, errors.Errorf("unable to convert interface %v to a form acceptable to structpb.NewStruct: %v", i, err)
 	}
 	ret, err := structpb.NewStruct(encoded)
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to construct structpb.Struct from map %v", encoded)
+		return nil, errors.Errorf("unable to construct structpb.Struct from map %v: %v", encoded, err)
 	}
 	return ret, nil
 }
@@ -205,5 +268,5 @@ func InvalidInterfaceErr(typeName resource.SubtypeName) error {
 
 // FailedToReadErr is the error describing when a Capturer was unable to get the reading of a method.
 func FailedToReadErr(component string, method string, err error) error {
-	return errors.Errorf("failed to get reading of method %s of component %s: %s", method, component, err)
+	return errors.Errorf("failed to get reading of method %s of component %s: %v", method, component, err)
 }

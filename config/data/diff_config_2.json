@@ -43,7 +43,7 @@
                         "pin": "1"
                     }
                 ],
-                "digitalInterrupts":
+                "digital_interrupts":
                 [
                     {
                         "name": "encoder",
@@ -75,19 +75,6 @@
                 "trap \"exit 0\" SIGINT; while true; do echo hello; sleep 2; done"
             ],
             "log": true
-        }
-    ],
-    "functions":
-    [
-        {
-            "name": "func1",
-            "engine": "foo",
-            "source": "1+1"
-        },
-        {
-            "name": "func2",
-            "engine": "bar",
-            "source": "2+2"
         }
     ]
 }

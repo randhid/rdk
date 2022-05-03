@@ -7,12 +7,16 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/jpeg"
+	"image/png"
 
 	"github.com/edaniels/golog"
 	"github.com/pkg/errors"
+	"github.com/xfmoulet/qoi"
 	"go.opencensus.io/trace"
 	"go.viam.com/utils/rpc"
 
+	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/grpc"
 	"go.viam.com/rdk/pointcloud"
 	pb "go.viam.com/rdk/proto/api/component/camera/v1"
@@ -79,6 +83,8 @@ func clientFromSvcClient(sc *serviceClient, name string) Camera {
 }
 
 func (c *client) Next(ctx context.Context) (image.Image, func(), error) {
+	ctx, span := trace.StartSpan(ctx, "camera::client::Next")
+	defer span.End()
 	resp, err := c.client.GetFrame(ctx, &pb.GetFrameRequest{
 		Name:     c.name,
 		MimeType: utils.MimeTypeViamBest,
@@ -86,6 +92,8 @@ func (c *client) Next(ctx context.Context) (image.Image, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	_, span2 := trace.StartSpan(ctx, "camera::client::Next::Decode::"+resp.MimeType)
+	defer span2.End()
 	switch resp.MimeType {
 	case utils.MimeTypeRawRGBA:
 		img := image.NewNRGBA(image.Rect(0, 0, int(resp.WidthPx), int(resp.HeightPx)))
@@ -98,6 +106,15 @@ func (c *client) Next(ctx context.Context) (image.Image, func(), error) {
 		depth, err := rimage.ReadDepthMap(bufio.NewReader(bytes.NewReader(resp.Image)))
 		img := rimage.MakeImageWithDepth(rimage.ConvertImage(depth.ToPrettyPicture(0, 0)), depth, true)
 		return img, func() {}, err
+	case utils.MimeTypeJPEG:
+		img, err := jpeg.Decode(bytes.NewReader(resp.Image))
+		return img, func() {}, err
+	case utils.MimeTypePNG:
+		img, err := png.Decode(bytes.NewReader(resp.Image))
+		return img, func() {}, err
+	case utils.MimeTypeQOI:
+		img, err := qoi.Decode(bytes.NewReader(resp.Image))
+		return img, func() {}, err
 	default:
 		return nil, nil, errors.Errorf("do not how to decode MimeType %s", resp.MimeType)
 	}
@@ -107,10 +124,12 @@ func (c *client) NextPointCloud(ctx context.Context) (pointcloud.PointCloud, err
 	ctx, span := trace.StartSpan(ctx, "camera-client::NextPointCloud")
 	defer span.End()
 
+	ctx, getPcdSpan := trace.StartSpan(ctx, "camera-client::NextPointCloud::GetPointCloud")
 	resp, err := c.client.GetPointCloud(ctx, &pb.GetPointCloudRequest{
 		Name:     c.name,
 		MimeType: utils.MimeTypePCD,
 	})
+	getPcdSpan.End()
 	if err != nil {
 		return nil, err
 	}
@@ -130,4 +149,8 @@ func (c *client) NextPointCloud(ctx context.Context) (pointcloud.PointCloud, err
 // Close cleanly closes the underlying connections.
 func (c *client) Close() error {
 	return c.serviceClient.Close()
+}
+
+func (c *client) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	return generic.DoFromConnection(ctx, c.conn, c.name, cmd)
 }
