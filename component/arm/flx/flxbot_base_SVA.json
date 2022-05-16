@@ -1,0 +1,9 @@
+{
+	"name": "flxbot_base",
+	"links": [
+		{
+		"id" : "base_link",
+		"parent": "world"
+		}
+	]
+}

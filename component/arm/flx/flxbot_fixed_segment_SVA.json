@@ -1,0 +1,73 @@
+{
+	"name": "flxbot_segment",
+	"links": [
+		{
+			"id": "fixed_segment_base_link",
+			"parent" : "base_link"
+		},
+		{
+			"id": "fixed_outer_cylinder_link",
+			"parent": "segment_base_link",
+			"translation": {"x":0.06109, "y": -2.9895E-06, "z": -0.00025366},
+			"geometry": {
+				"x": 0.0125, "y": 0.0125, "z": 0.152,
+				"translation" : {"x":0.71, "y": 0, "z":0},
+				"orientation" : {"type": "euler_angles", "value": {"roll": 0, "pitch": 90, "yaw":0}}
+			}
+		},
+		{
+			"id": "fixed_rotate_link",
+			"parent": "fixed_outer_cylinder_link"
+		},
+		{
+			"id": "fixed_inner_body_link",
+			"parent": "fixed_rotate_link",
+			"translation": {"x":0.10056, "y": 1.7877E-05, "z": 0.00016309},
+			"geometry": {
+				"x": 0.0125, "y":0.0125, "z":0.025, 
+				"translation": {"x":0.1620, "y":0, "z":0},
+				"orientation": {"roll":0, "pitch": 90, "yaw": 0}
+			}
+		},
+		{
+			"id": "fixed_pin_link",
+			"parent": "inner_body_link",
+			"translation": {"x": 0.1868, "y":0, "z":0},
+			"orientation": {"type": "euler_angles", "value": {"roll": 0, "pitch": 0.3926990816987214, "yaw":0}}
+		},
+		{
+			"id": "fixed_segment_end_effector",
+			"parent": "pin_link",
+			"orientation": {"type": "euler_angles", "value":{"roll": 0, "pitch": -0.39239908169872414, "yaw":0}}
+		}
+	],
+	"joints": [
+		{
+			"id": "outer_body_joint",
+			"parent" : "segment_base_link"
+		},
+		{
+			"id": "rotate",
+			"parent" : "outer_cylinder_link",
+			"axis": {"x": 1, "y":0, "z":0},
+			"min": -360,
+			"max": 360
+		},
+		{
+			"id": "extend",
+			"parent": "rotate_link",
+			"type": "prismatic",
+			"axis": {"x":1, "y":0, "z":0},
+			"min": 10,
+			"max": 0
+		},
+		{
+			"id": "pin",
+			"parent": "inner_body_link",
+			"type" : "revolute",
+			"axis": {"x":1, "y":0, "z":0},
+			"max":-360,
+			"min":360
+		}
+	]
+}

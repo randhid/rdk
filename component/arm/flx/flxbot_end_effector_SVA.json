@@ -1,0 +1,9 @@
+{
+	"name": "flxbot_end_effector",
+	"links": [
+		{
+		"id": "end_effector",
+		"parent": "segment_end_effector"
+	}
+	]
+}
