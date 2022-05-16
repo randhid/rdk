@@ -6,6 +6,7 @@ import (
 
 	// for embedding model kinematics file.
 	_ "embed"
+	"strconv"
 	"sync"
 
 	"github.com/edaniels/golog"
@@ -70,7 +71,7 @@ func init() {
 			r robot.Robot,
 			config config.Component,
 			logger golog.Logger) (interface{}, error) {
-			return newFLX(config, logger)
+			return newFLX(ctx, config, logger)
 		},
 	})
 
@@ -82,7 +83,7 @@ func init() {
 		&AttrConfig{})
 }
 
-func newFLX(cfg config.Component, logger golog.Logger) (arm.Arm, error) {
+func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm.Arm, error) {
 	flxconf, ok := cfg.ConvertedAttributes.(*AttrConfig)
 	if !ok {
 		return nil, errors.New("flxArm Attributes invalid")
@@ -96,11 +97,20 @@ func newFLX(cfg config.Component, logger golog.Logger) (arm.Arm, error) {
 		logger:   logger,
 	}
 
-	model, err := newArm.flxArmModel()
-	if err != nil {
-		return nil, err
+	switch newArm.mode {
+	case flxfoab:
+		model, err := foabModel()
+		newArm.model = model
+		if err != nil {
+			return nil, err
+		}
+	case flxseg:
+		model, err := flxArmModel(newArm.numSeg)
+		newArm.model = model
+		if err != nil {
+			return nil, err
+		}
 	}
-	newArm.model = model
 
 	mp, err := motionplan.NewCBiRRTMotionPlanner(newArm.model, 4, logger)
 	if err != nil {
@@ -111,44 +121,59 @@ func newFLX(cfg config.Component, logger golog.Logger) (arm.Arm, error) {
 	return newArm, nil
 }
 
-func (flx *flxArm) flxArmModel() (referenceframe.Model, error) {
+func foabModel() (referenceframe.Model, error) {
 	model := referenceframe.NewSimpleModel()
-	basem, err := referenceframe.UnmarshalModelJSON(flxbotBasejson, "")
+	basem, err := referenceframe.UnmarshalModelJSON(flxbotBasejson, "base")
 	if err != nil {
 		return nil, err
 	}
-	eem, err := referenceframe.UnmarshalModelJSON(flxbotEndEffectorjson, "")
+	eem, err := referenceframe.UnmarshalModelJSON(flxbotEndEffectorjson, "endeffector")
+	if err != nil {
+		return nil, err
+	}
+	fixm, err := referenceframe.UnmarshalModelJSON(flxbotFixedjson, "fixed")
+	if err != nil {
+		return nil, err
+	}
+	segm, err := referenceframe.UnmarshalModelJSON(flxbotSegmentjson, "segment")
+	if err != nil {
+		return nil, err
+	}
+	model.OrdTransforms = append(model.OrdTransforms, basem, fixm, segm, eem)
+	model.ChangeName("foab")
+	return model, nil
+}
+
+func flxArmModel(numSeg int) (referenceframe.Model, error) {
+	model := referenceframe.NewSimpleModel()
+	basem, err := referenceframe.UnmarshalModelJSON(flxbotBasejson, "base")
 	if err != nil {
 		return nil, err
 	}
 
-	model.OrdTransforms = append(model.OrdTransforms, basem)
-
-	switch flx.mode {
-	case flxfoab:
-		flxm, err := referenceframe.UnmarshalModelJSON(flxbotFixedjson, "")
-		if err != nil {
-			return nil, err
-		}
-		segm, err := referenceframe.UnmarshalModelJSON(flxbotSegmentjson, "")
-		if err != nil {
-			return nil, err
-		}
-		model.OrdTransforms = append(model.OrdTransforms, segm, flxm, eem)
-		return model, nil
-	case flxseg:
-		segm, err := referenceframe.UnmarshalModelJSON(flxbotSegmentjson, "")
-		if err != nil {
-			return nil, err
-		}
-		for idx := 0; idx < flx.numSeg; idx++ {
-			model.OrdTransforms = append(model.OrdTransforms, segm)
-		}
-		model.OrdTransforms = append(model.OrdTransforms, eem)
-		return model, nil
-	default:
-		return nil, errors.Errorf("flxbot Mode %s, not implemented", flx.mode)
+	fixm, err := referenceframe.UnmarshalModelJSON(flxbotFixedjson, "fixed")
+	if err != nil {
+		return nil, err
 	}
+	model.OrdTransforms = append(model.OrdTransforms, basem, fixm)
+
+	for idx := 0; idx < numSeg; idx++ {
+		segname := "seg" + strconv.Itoa(idx)
+		seg, err := referenceframe.UnmarshalModelJSON(flxbotSegmentjson, segname)
+		if err != nil {
+			return nil, err
+		}
+		model.OrdTransforms = append(model.OrdTransforms, seg)
+	}
+
+	eem, err := referenceframe.UnmarshalModelJSON(flxbotEndEffectorjson, "endeffector")
+	if err != nil {
+		return nil, err
+	}
+
+	model.OrdTransforms = append(model.OrdTransforms, eem)
+	model.ChangeName("flxarm")
+	return model, nil
 }
 
 func (flx *flxArm) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {

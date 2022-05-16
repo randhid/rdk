@@ -1,0 +1,14 @@
+{
+    "components":
+    [ 
+        {
+        "type":"arm",
+        "model": "flx",
+        "name": "flxarm-trial",
+        "attributes": {
+            "host": "none",
+            "flxbot_mode": "foab"
+            }
+        }
+    ]
+}

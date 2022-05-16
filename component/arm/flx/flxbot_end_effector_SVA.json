@@ -3,7 +3,9 @@
 	"links": [
 		{
 		"id": "end_effector",
-		"parent": "segment_end_effector"
+		"parent": "world",
+		"orientation": {"type": "euler_angles", "value":{"roll": 0, "pitch": -0.39239908169872414, "yaw":0}}
+
 	}
 	]
 }
