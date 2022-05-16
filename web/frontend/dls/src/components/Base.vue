@@ -6,13 +6,7 @@
         <Breadcrumbs :crumbs="crumbs" disabled="true"></Breadcrumbs>
       </div>
       <div class="p-2 float-right">
-        <ViamButton
-          color="danger"
-          group
-          variant="primary"
-          :disabled="!baseStatus && selectedItem !== 'keyboard'"
-          @click="baseStop()"
-        >
+        <ViamButton color="danger" group variant="primary" @click="baseStop">
           <template v-slot:icon>
             <ViamIcon color="white" :path="mdiCloseOctagonOutline"
               >STOP</ViamIcon
@@ -53,18 +47,7 @@
                   <div>
                     <div>
                       <div class="flex">
-                        <input id="angle" type="hidden" value="45" />
-                        <ViamInput
-                          type="number"
-                          color="primary"
-                          group="False"
-                          variant="primary"
-                          class="pr-2 w-32"
-                          inputId="distance"
-                          v-model="increment"
-                        >
-                          <span class="text-xs">Increment (mm)</span>
-                        </ViamInput>
+                        <!-- May need a speed input
                         <ViamInput
                           type="number"
                           color="primary"
@@ -76,21 +59,11 @@
                         >
                           <span class="text-xs">Speed (mm/sec)</span>
                         </ViamInput>
+                        -->
                       </div>
                     </div>
                     <div class="flex pt-6">
-                      <KeyboardInput
-                        @arc-right="$emit('arc-right')"
-                        @arc-left="$emit('arc-left')"
-                        @back-arc-right="$emit('back-arc-right')"
-                        @back-arc-left="$emit('back-arc-left')"
-                        @forward="$emit('forward')"
-                        @backward="$emit('backward')"
-                        @spin-clockwise="$emit('spin-clockwise')"
-                        @spin-counter-clockwise="
-                          $emit('spin-counter-clockwise')
-                        "
-                      >
+                      <KeyboardInput @keyboard-ctl="keyboardCtl">
                       </KeyboardInput>
                     </div>
                   </div>
@@ -103,15 +76,17 @@
                           Select Camera
                         </p>
                         <div class="relative">
-                          <ViamSelect :options="cameraOptions"
-                                      v-model="selectedValue"
-                                      @change="$emit('show-base-camera')">
+                          <ViamSelect
+                            :options="cameraOptions"
+                            v-model="selectedValue"
+                            @selected="$emit('show-base-camera')"
+                          >
                           </ViamSelect>
                         </div>
                       </div>
                     </div>
                     <div
-                      class="bg-black w-48 h-48 transition-all duration-300 ease-in-out"
+                      class="w-48 h-48 transition-all duration-300 ease-in-out"
                       v-if="selectedValue !== 'NoCamera'"
                       :id="streamId"
                     ></div>
@@ -168,15 +143,26 @@
                 class="text-xs pr-2 w-32"
                 >Speed (mm/sec)
               </ViamInput>
+              <input
+                type="hidden"
+                id="distance"
+                :value="maxDistance"
+                v-if="
+                  movementMode === 'Straight' && movementType === 'Continous'
+                "
+              />
               <ViamInput
-                v-if="movementMode === 'Straight' || movementMode === 'Arc'"
+                v-if="
+                  (movementMode === 'Straight' &&
+                    movementType === 'Discrete') ||
+                  movementMode === 'Arc'
+                "
                 type="number"
                 color="primary"
                 group="False"
                 variant="primary"
                 v-model="increment"
                 inputId="distance"
-                :disabled="movementType === 'Continous'"
                 class="text-xs pr-2 w-32"
                 >Distance (mm)
               </ViamInput>
@@ -215,7 +201,6 @@
                   color="success"
                   group
                   variant="primary"
-                  :disabled="baseStatus"
                   @click="baseRun()"
                 >
                   <template v-slot:icon>
@@ -283,13 +268,17 @@ export default class Base extends Vue {
   movementMode = "Straight";
   movementType = "Continous";
   direction = "Forwards";
-  spinType = "";
+  spinType = "Clockwise";
   increment = 1000;
-  maxClusteringRadius = 90
-  
+  maxClusteringRadius = 90;
+  maxDistance = Math.pow(2, 32);
+
   speed = 200;
-  angle = 0
-  cameraOptions = [{value: 'NoCamera', label: 'No Camera'}, {value: 'Camera1', label: 'Camera1'}]
+  angle = 0;
+  cameraOptions = [
+    { value: "NoCamera", label: "No Camera" },
+    { value: "Camera1", label: "Camera1" },
+  ];
   beforeMount(): void {
     window.addEventListener("resize", this.resizeContent);
   }
@@ -306,7 +295,7 @@ export default class Base extends Vue {
     this.movementMode = "Straight";
     this.movementType = "Continous";
     this.direction = "Forwards";
-    this.spinType = '';
+    this.spinType = "Clockwise";
   }
 
   setMovementMode(e: string): void {
@@ -334,7 +323,9 @@ export default class Base extends Vue {
       this.direction
     );
   }
-  baseStop(): void {
+  baseStop(e: Event): void {
+    e.preventDefault();
+    e.stopPropagation();
     this.$emit(
       "base-stop",
       this.movementMode,
@@ -349,6 +340,16 @@ export default class Base extends Vue {
     } else {
       this.maxHeight = 500;
     }
+  }
+  keyboardCtl(keysPressed: any): void {
+    let toEmit = {
+      baseName: this.baseName,
+      forward: keysPressed.forward,
+      backward: keysPressed.backward,
+      right: keysPressed.right,
+      left: keysPressed.left,
+    };
+    this.$emit("keyboard-ctl", toEmit);
   }
 }
 </script>
