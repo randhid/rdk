@@ -2,6 +2,10 @@ package flx
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 
 	// for embedding model kinematics file.
@@ -26,11 +30,10 @@ const (
 
 // AttrConfig is used for converting attributes
 type AttrConfig struct {
-	Host string `json:"host"`
+	Host      string `json:"host"`
 	NumFlxSeg string `json:"number_of_flx_segments"`
-	Mode string `json:"flxbot_mode"`
+	Mode      string `json:"flxbot_mode"`
 }
-
 
 //go:embed flxbot_base_SVA.json
 var flxbotBasejson []byte
@@ -77,7 +80,6 @@ func init() {
 func NewFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm.Arm, error) {
 	flxconf := cfg.ConvertedAttributes.(*AttrConfig)
 
-
 	flxArm := &flxArm{
 		Unimplemented: generic.Unimplemented{},
 		host:          flxconf.Host,
@@ -88,12 +90,11 @@ func NewFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 		frameJSON:     []byte{},
 	}
 	return flxArm, nil
-}	
-
-func flxArmModel(flxbotMode string) (referenceframe.Model, error) {
-	return referenceframe.UnmarshalModelJSON(flxbotSegmentjson)
 }
 
+func flxArmModel(flxbotMode string) (referenceframe.Model, error) {
+	return referenceframe.UnmarshalModelJSON(flxbotSegmentjson, "")
+}
 
 func (flx *flxArm) ModelFrame() referenceframe.Model {
 	return flx.model
@@ -112,11 +113,33 @@ func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, world
 }
 
 func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.JointPositions) error {
-	return nil
+	positions := newPositions.GetDegrees()
+	positionsStr := ""
+	for _, pos := range positions {
+		positionsStr += fmt.Sprintf("%d ", pos)
+	}
+	cmd := exec.Command("python flxbot_move_to_joint_position.py", positionsStr, "10")
+	return cmd.Run()
 }
 
 func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
-	return nil, nil
+	cmd := exec.Command("python flxbot_state.py")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+	posStrings := strings.Split(string(out), " ")
+	result := &pb.JointPositions{}
+	degs := make([]float64, 0, len(posStrings))
+	for i, posStr := range posStrings {
+		pos, err := strconv.ParseFloat(posStr, 64)
+		if err != nil {
+			return nil, err
+		}
+		degs[i] = pos
+	}
+	result.Degrees = degs
+	return result, nil
 }
 
 func (flx *flxArm) CurrentInputs(ctx context.Context) ([]referenceframe.Input, error) {
