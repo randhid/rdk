@@ -3,11 +3,14 @@ package flx
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
 
 	// for embedding model kinematics file.
 	_ "embed"
-	"strconv"
-	"sync"
 
 	"github.com/edaniels/golog"
 	"github.com/pkg/errors"
@@ -90,11 +93,12 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 	}
 
 	newArm := &flxArm{
-		host:     flxconf.Host,
-		mode:     flxbotmode(flxconf.Mode),
-		numSeg:   flxconf.NumFlxSeg,
-		moveLock: &sync.Mutex{},
-		logger:   logger,
+		Unimplemented: generic.Unimplemented{},
+		host:          flxconf.Host,
+		mode:          flxbotmode(flxconf.Mode),
+		numSeg:        flxconf.NumFlxSeg,
+		moveLock:      &sync.Mutex{},
+		logger:        logger,
 	}
 
 	switch newArm.mode {
@@ -176,22 +180,16 @@ func flxArmModel(numSeg int) (referenceframe.Model, error) {
 	return model, nil
 }
 
+func (flx *flxArm) ModelFrame() referenceframe.Model {
+	return flx.model
+}
+
 func (flx *flxArm) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
 	joints, err := flx.GetJointPositions(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return motionplan.ComputePosition(flx.mp.Frame(), joints)
-}
-
-func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.JointPositions) error {
-	// Os.exec for move to joint positions
-	return nil
-}
-
-func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
-	// Code for os exec get joint positions
-	return &pb.JointPositions{}, nil
 }
 
 func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, worldState *commonpb.WorldState) error {
@@ -203,8 +201,34 @@ func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, world
 	return nil
 }
 
-func (flx *flxArm) ModelFrame() referenceframe.Model {
-	return flx.model
+func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.JointPositions) error {
+	positions := newPositions.GetDegrees()
+	positionsStr := ""
+	for _, pos := range positions {
+		positionsStr += fmt.Sprintf("%f ", pos)
+	}
+	cmd := exec.Command("python flxbot_move_to_joint_position.py", positionsStr, "10")
+	return cmd.Run()
+}
+
+func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
+	cmd := exec.Command("python flxbot_state.py")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+	posStrings := strings.Split(string(out), " ")
+	result := &pb.JointPositions{}
+	degs := make([]float64, 0, len(posStrings))
+	for i, posStr := range posStrings {
+		pos, err := strconv.ParseFloat(posStr, 64)
+		if err != nil {
+			return nil, err
+		}
+		degs[i] = pos
+	}
+	result.Degrees = degs
+	return result, nil
 }
 
 func (flx *flxArm) CurrentInputs(ctx context.Context) ([]referenceframe.Input, error) {
