@@ -3,15 +3,15 @@ package flx
 
 import (
 	"context"
+
+	// for embedding model kinematics file.
+	_ "embed"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	// for embedding model kinematics file.
-	_ "embed"
 
 	"github.com/edaniels/golog"
 	"github.com/pkg/errors"
@@ -205,9 +205,8 @@ func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, world
 		return err
 	}
 
-	solTime := time.Since(start)
-	if solTime > 2*time.Second {
-		return errors.Errorf("flx took too long to solve for new position %v", solTime)
+	if time.Since(start) > 2*time.Second {
+		return errors.Errorf("flx took too long to solve for new position %v", time.Since(start))
 	}
 	return arm.GoToWaypoints(ctx, flx, solution)
 }
@@ -218,12 +217,12 @@ func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.Jo
 	for _, pos := range positions {
 		positionsStr += fmt.Sprintf("%f ", pos)
 	}
-	cmd := exec.Command("python flxbot_move_to_joint_position.py", positionsStr, "10", "10")
+	cmd := exec.Command("python", "flxbot_python/flxbot_state.py", positionsStr, "10", "10")
 	return cmd.Run()
 }
 
 func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
-	cmd := exec.Command("python flxbot_state.py")
+	cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, err
