@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	// for embedding model kinematics file.
 	_ "embed"
@@ -193,12 +194,22 @@ func (flx *flxArm) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
 }
 
 func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, worldState *commonpb.WorldState) error {
-	_, err := flx.GetJointPositions(ctx)
+	joints, err := flx.GetJointPositions(ctx)
 	if err != nil {
 		return err
 	}
 
-	return nil
+	start := time.Now()
+	solution, err := flx.mp.Plan(ctx, pos, referenceframe.JointPosToInputs(joints), nil)
+	if err != nil {
+		return err
+	}
+
+	solTime := time.Since(start)
+	if solTime > 2*time.Second {
+		return errors.Errorf("flx took too long to solve for new position %v", solTime)
+	}
+	return arm.GoToWaypoints(ctx, flx, solution)
 }
 
 func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.JointPositions) error {
