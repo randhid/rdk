@@ -218,7 +218,7 @@ func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.Jo
 	for _, pos := range positions {
 		positionsStr += fmt.Sprintf("%f ", pos)
 	}
-	cmd := exec.Command("python flxbot_move_to_joint_position.py", positionsStr, "10")
+	cmd := exec.Command("python flxbot_move_to_joint_position.py", positionsStr, "10", "10")
 	return cmd.Run()
 }
 
