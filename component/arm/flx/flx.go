@@ -2,6 +2,7 @@
 package flx
 
 import (
+	"bytes"
 	"context"
 
 	// for embedding model kinematics file.
@@ -217,17 +218,24 @@ func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.Jo
 	for _, pos := range positions {
 		positionsStr += fmt.Sprintf("%f ", pos)
 	}
-	cmd := exec.Command("python", "flxbot_python/flxbot_state.py", positionsStr, "10", "10")
+	cmd := exec.Command("python", "component/arm/flx/flxbot_python/flxbot_move_to_joint_position.py", positionsStr, "10", "10")
 	return cmd.Run()
 }
 
 func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
-	cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
-	out, err := cmd.CombinedOutput()
+	cmd := exec.Command("python", "component/arm/flx/flxbot_python/flxbot_state.py")
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	//out, err := cmd.CombinedOutput()
+	err := cmd.Run()
+
 	if err != nil {
+		fmt.Println(fmt.Sprint(err) + ": " + stderr.String())
 		return nil, err
 	}
-	posStrings := strings.Split(string(out), " ")
+	posStrings := strings.Split(out.String(), " ")
 	result := &pb.JointPositions{}
 	degs := make([]float64, 0, len(posStrings))
 	for i, posStr := range posStrings {
