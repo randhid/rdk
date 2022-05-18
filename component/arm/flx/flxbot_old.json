@@ -5,34 +5,32 @@
 		{
 			"id": "outer_cylinder_link",
 			"parent": "world",
-			"translation": {"x":0.152, "y": 0.0, "z": 0},
-			"orientation":{"type": "euler_angles", "value": {"roll": 0, "pitch": 1.57, "yaw":0}},
+			"translation": {"x":0.0, "y": -0.0, "z": -0.0},
 			"geometry": {
 				"x": 0.0125, "y": 0.0125, "z": 0.152,
 				"translation" : {"x":0.0, "y": 0, "z":0},
-				"orientation" : {"type": "euler_angles", "value": {"roll": 0, "pitch": 1.57, "yaw":0}}
+				"orientation" : {"type": "euler_angles", "value": {"roll": 1.57, "pitch": 0, "yaw":0}}
 			}
 		},
 		{
 			"id": "inner_body_link",
 			"parent": "rotate",
 			"translation": {"x":0.0, "y": 0.0, "z": 0.0},
-			"orientation":{"type": "euler_angles", "value": {"roll": 0, "pitch": 0, "yaw":0}},
 			"geometry": {
 				"x": 0.01, "y":0.01, "z":0.127, 
-				"translation": {"x":0, "y":0.0, "z":-0.1395},
-				"orientation": {"type": "euler_angles", "value": {"roll":0, "pitch": 0, "yaw": 0}}
+				"translation": {"x":-0.085, "y":0, "z":0},
+				"orientation": {"roll":0, "pitch": 1.57, "yaw": 0}
 			}
 		},
 		{
 			"id": "pin_link",
 			"parent": "pin",
-			"translation": {"x": 0.0, "y":0, "z":0.00},
-			"orientation": {"type": "euler_angles", "value": {"roll":  0, "pitch":0, "yaw":0}},
+			"translation": {"x": 0.1868, "y":0, "z":0},
+			"orientation": {"type": "euler_angles", "value": {"roll": 0, "pitch": -0.3926991, "yaw":0}},
 			"geometry": {
-				"x": 0.015, "y":0.015, "z":0.001, 
-				"translation": {"x":-0.0, "y":0, "z":-0.0685},
-				"orientation": {"type": "euler_angles", "value": {"roll":0, "pitch": 0.39, "yaw": 0}}
+				"x": 0.01, "y":0.01, "z":0.01, 
+				"translation": {"x":0.085, "y":0, "z":0},
+				"orientation": {"roll":0, "pitch": 0, "yaw": 0}
 			}
 		}
 	],

@@ -1,7 +1,7 @@
 import flxbot_commander
 import sys
 
-def main():
+if __name__ == "__main__":
     commander = flxbot_commander.FlxbotCommander()
     state = commander.ros.state.state()
     segments = state.segments
