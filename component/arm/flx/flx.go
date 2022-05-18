@@ -3,6 +3,7 @@ package flx
 
 import (
 	"context"
+	exec "os/exec"
 
 	// for embedding model kinematics file.
 	_ "embed"
@@ -126,15 +127,8 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 
 func foabModel() (referenceframe.Model, error) {
 	model := referenceframe.NewSimpleModel()
-	basem, err := referenceframe.UnmarshalModelJSON(flxbotBasejson, "base")
-	if err != nil {
-		return nil, err
-	}
-	eem, err := referenceframe.UnmarshalModelJSON(flxbotEndEffectorjson, "endeffector")
-	if err != nil {
-		return nil, err
-	}
-	fixm, err := referenceframe.UnmarshalModelJSON(flxbotFixedjson, "fixed")
+
+	fixm, err := referenceframe.UnmarshalModelJSON(flxbotFixedjson, "base")
 	if err != nil {
 		return nil, err
 	}
@@ -142,23 +136,19 @@ func foabModel() (referenceframe.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	model.OrdTransforms = append(model.OrdTransforms, basem, fixm, segm, eem)
+	model.OrdTransforms = append(model.OrdTransforms, fixm, segm)
 	model.ChangeName("foab")
 	return model, nil
 }
 
 func flxArmModel(numSeg int) (referenceframe.Model, error) {
 	model := referenceframe.NewSimpleModel()
-	basem, err := referenceframe.UnmarshalModelJSON(flxbotBasejson, "base")
-	if err != nil {
-		return nil, err
-	}
 
 	fixm, err := referenceframe.UnmarshalModelJSON(flxbotFixedjson, "fixed")
 	if err != nil {
 		return nil, err
 	}
-	model.OrdTransforms = append(model.OrdTransforms, basem, fixm)
+	model.OrdTransforms = append(model.OrdTransforms, fixm)
 
 	for idx := 0; idx < numSeg; idx++ {
 		segname := "seg" + strconv.Itoa(idx)
@@ -169,12 +159,6 @@ func flxArmModel(numSeg int) (referenceframe.Model, error) {
 		model.OrdTransforms = append(model.OrdTransforms, seg)
 	}
 
-	eem, err := referenceframe.UnmarshalModelJSON(flxbotEndEffectorjson, "endeffector")
-	if err != nil {
-		return nil, err
-	}
-
-	model.OrdTransforms = append(model.OrdTransforms, eem)
 	model.ChangeName("flxarm")
 	return model, nil
 }
@@ -215,46 +199,39 @@ func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.Jo
 	for _, pos := range positions {
 		positionsStr += fmt.Sprintf("%f ", pos)
 	}
-	// cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "10", "10")
-	// return cmd.Run()
-	return nil
+	cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "10", "10")
+	return cmd.Run()
 }
 
 func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
 	// cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
-	// var out bytes.Buffer
-	// var stderr bytes.Buffer
-	// cmd.Stdout = &out
-	// cmd.Stderr = &stderr
 	// err := cmd.Run()
 
 	// out, err := cmd.CombinedOutput()
 
 	// if err != nil {
-	// fmt.Println(fmt.Sprint(err) + ": " + stderr.String())
 	// return nil, err
-	// }\
+	// }
 	// out := string("0 0 0 0 0 0 0")
-	// posStrings := strings.Split(out.String(), " ")
 	// posStrings := strings.Split(string(out), " ")
-	// fmt.Println(len(posStrings))
 
 	// result := &pb.JointPositions{}
 	// degs := make([]float64, 0, len(posStrings))
 	// for i, posStr := range posStrings {
-	// fmt.Println("posStrings =")
-	// fmt.Println(posStr)
 	// pos, err := strconv.ParseFloat(posStr, 64)
 	// if err != nil {
 	// return nil, err
 	// }
 	// degs[i] = pos
 	// }
-	// fmt.Println("degs = ")
-	// fmt.Println(degs)
 	// result.Degrees = degs
 	// return result, nil
-	return &pb.JointPositions{Degrees: []float64{0, 0, 0, 0, 0, 0}}, nil
+	degs := make([]float64, len(flx.model.DoF()))
+	for i := 0; i < cap(degs); i++ {
+		degs[i] = float64(i)
+	}
+
+	return &pb.JointPositions{Degrees: degs}, nil
 }
 
 func (flx *flxArm) CurrentInputs(ctx context.Context) ([]referenceframe.Input, error) {

@@ -8,7 +8,7 @@
         "attributes": {
             "host": "none",
             "speed":0.2,
-            "flxbot_mode": "foab",
+            "flxbot_mode": "segments",
             "number_of_segments": 2
             }
         }

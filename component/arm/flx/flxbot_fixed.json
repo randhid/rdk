@@ -7,7 +7,7 @@
 			"translation": {"x":0.06109, "y": 0, "z": -0.00025366},
 			"geometry": {
 				"x": 0.0125, "y": 0.0125, "z": 0.152,
-				"translation" : {"x":0.71, "y": 0, "z":0},
+				"translation" : {"x":0, "y": 0, "z":0},
 				"orientation" : {"type": "euler_angles", "value": {"roll": 0, "pitch": 90, "yaw":0}}
 			}
 		},
