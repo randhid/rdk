@@ -4,10 +4,12 @@
         {
         "type":"arm",
         "model": "flx",
-        "name": "flxarm-trial",
+        "name": "test",
         "attributes": {
             "host": "none",
-            "flxbot_mode": "foab"
+            "speed":0.2,
+            "flxbot_mode": "foab",
+            "number_of_segments": 2
             }
         }
     ]
