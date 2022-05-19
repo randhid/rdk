@@ -4,6 +4,7 @@ package flx
 import (
 	"context"
 	exec "os/exec"
+	"strings"
 
 	// for embedding model kinematics file.
 	_ "embed"
@@ -201,38 +202,38 @@ func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.Jo
 }
 
 func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
-	// cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
-	// err := cmd.Run()
+	cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
+	err := cmd.Run()
 
-	// out, err := cmd.CombinedOutput()
-	// fmt.Println(out)
+	out, err := cmd.CombinedOutput()
+	fmt.Println(out)
 
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// // out := string("0 0 0 0 0 0 0")
-	// posStrings := strings.Split(string(out), " ")
-
-	// result := &pb.JointPositions{}
-	// degs := make([]float64, 0, len(posStrings))
-	// for i, posStr := range posStrings {
-	// 	pos, err := strconv.ParseFloat(posStr, 64)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	degs[i] = pos
-	// }
-	// result.Degrees = degs
-	// return result, nil
-	degs := make([]float64, len(flx.model.DoF()))
-	for i := 0; i < cap(degs); i++ {
-		if i < 2 {
-			degs[i] = 0
-		} else {
-			degs[i] = float64(i)
-		}
+	if err != nil {
+		return nil, err
 	}
-	return &pb.JointPositions{Degrees: degs}, nil
+	// out := string("0 0 0 0 0 0 0")
+	posStrings := strings.Split(string(out), " ")
+
+	result := &pb.JointPositions{}
+	degs := make([]float64, 0, len(posStrings))
+	for i, posStr := range posStrings {
+		pos, err := strconv.ParseFloat(posStr, 64)
+		if err != nil {
+			return nil, err
+		}
+		degs[i] = pos
+	}
+	result.Degrees = degs
+	return result, nil
+	// degs := make([]float64, len(flx.model.DoF()))
+	// for i := 0; i < cap(degs); i++ {
+	// 	if i < 2 {
+	// 		degs[i] = 0
+	// 	} else {
+	// 		degs[i] = float64(i)
+	// 	}
+	// }
+	// return &pb.JointPositions{Degrees: degs}, nil
 }
 
 func (flx *flxArm) CurrentInputs(ctx context.Context) ([]referenceframe.Input, error) {
