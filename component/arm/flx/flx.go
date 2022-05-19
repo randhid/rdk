@@ -37,14 +37,8 @@ type AttrConfig struct {
 	Mode      string `json:"flxbot_mode"`
 }
 
-//go:embed flxbot_base_SVA.json
-var flxbotBasejson []byte
-
 //go:embed flxbot_segment_SVA.json
 var flxbotSegmentjson []byte
-
-//go:embed flxbot_end_effector_SVA.json
-var flxbotEndEffectorjson []byte
 
 //go:embed flxbot_fixed_segment_SVA.json
 var flxbotFixedjson []byte
@@ -113,6 +107,8 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 		newArm.model = model
 		if err != nil {
 			return nil, err
+		} else {
+			return nil, errors.New("flx segment modular is currently experimental")
 		}
 	}
 
@@ -152,6 +148,7 @@ func flxArmModel(numSeg int) (referenceframe.Model, error) {
 
 	for idx := 0; idx < numSeg; idx++ {
 		segname := "seg" + strconv.Itoa(idx)
+		fmt.Print(segname)
 		seg, err := referenceframe.UnmarshalModelJSON(flxbotSegmentjson, segname)
 		if err != nil {
 			return nil, err
@@ -208,29 +205,33 @@ func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, e
 	// err := cmd.Run()
 
 	// out, err := cmd.CombinedOutput()
+	// fmt.Println(out)
 
 	// if err != nil {
-	// return nil, err
+	// 	return nil, err
 	// }
-	// out := string("0 0 0 0 0 0 0")
+	// // out := string("0 0 0 0 0 0 0")
 	// posStrings := strings.Split(string(out), " ")
 
 	// result := &pb.JointPositions{}
 	// degs := make([]float64, 0, len(posStrings))
 	// for i, posStr := range posStrings {
-	// pos, err := strconv.ParseFloat(posStr, 64)
-	// if err != nil {
-	// return nil, err
-	// }
-	// degs[i] = pos
+	// 	pos, err := strconv.ParseFloat(posStr, 64)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	degs[i] = pos
 	// }
 	// result.Degrees = degs
 	// return result, nil
 	degs := make([]float64, len(flx.model.DoF()))
 	for i := 0; i < cap(degs); i++ {
-		degs[i] = float64(i)
+		if i < 2 {
+			degs[i] = 0
+		} else {
+			degs[i] = float64(i)
+		}
 	}
-
 	return &pb.JointPositions{Degrees: degs}, nil
 }
 

@@ -9,7 +9,9 @@ if __name__ == "__main__":
     state = commander.ros.state.state()
     segments = state.segments
     result = []
+    segments = [1, 1]
     for segment in segments:
-        result.append(_rad_to_deg(segment.drive.joints.rotate.position))
-        result.append(_rad_to_deg(segment.drive.joints.pin.position))   
+        # result.append(_rad_to_deg(segment.drive.joints.rotate.position))
+        # result.append(_rad_to_deg(segment.drive.joints.pin.position))   
+        result.append(segment)
     print(" ".join([ str(el) for el in result ]))
