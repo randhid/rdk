@@ -17,13 +17,18 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"go.viam.com/rdk/config"
+	"go.viam.com/rdk/discovery"
 	"go.viam.com/rdk/grpc"
 	"go.viam.com/rdk/operation"
+	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	pb "go.viam.com/rdk/proto/api/robot/v1"
+	"go.viam.com/rdk/protoutils"
+	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
-	"go.viam.com/rdk/services/metadata"
+	framesystemparts "go.viam.com/rdk/robot/framesystem/parts"
 )
 
 // errUnimplemented is used for any unimplemented methods that should
@@ -33,11 +38,10 @@ var errUnimplemented = errors.New("unimplemented")
 // RobotClient satisfies the robot.Robot interface through a gRPC based
 // client conforming to the robot.proto contract.
 type RobotClient struct {
-	address        string
-	conn           rpc.ClientConn
-	client         pb.RobotServiceClient
-	metadataClient metadata.Service
-	dialOptions    []rpc.DialOption
+	address     string
+	conn        rpc.ClientConn
+	client      pb.RobotServiceClient
+	dialOptions []rpc.DialOption
 
 	mu            *sync.RWMutex
 	resourceNames []resource.Name
@@ -127,10 +131,8 @@ func (rc *RobotClient) connect(ctx context.Context) error {
 	defer rc.mu.Unlock()
 
 	client := pb.NewRobotServiceClient(conn)
-	metadataClient := metadata.NewClientFromConn(ctx, conn, "", rc.logger)
 	rc.conn = conn
 	rc.client = client
-	rc.metadataClient = metadataClient
 	rc.connected = true
 	if rc.changeChan != nil {
 		rc.changeChan <- true
@@ -166,7 +168,7 @@ func (rc *RobotClient) checkConnection(ctx context.Context, checkEvery time.Dura
 			check := func() error {
 				timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer cancel()
-				if _, err := rc.metadataClient.Resources(timeoutCtx); err != nil {
+				if _, err := rc.resources(timeoutCtx); err != nil {
 					return err
 				}
 				return nil
@@ -264,6 +266,21 @@ func (rc *RobotClient) ResourceByName(name resource.Name) (interface{}, error) {
 	return resourceClient, nil
 }
 
+func (rc *RobotClient) resources(ctx context.Context) ([]resource.Name, error) {
+	resp, err := rc.client.ResourceNames(ctx, &pb.ResourceNamesRequest{})
+	if err != nil {
+		return nil, err
+	}
+
+	resources := make([]resource.Name, 0, len(resp.Resources))
+
+	for _, name := range resp.Resources {
+		newName := protoutils.ResourceNameFromProto(name)
+		resources = append(resources, newName)
+	}
+	return resources, nil
+}
+
 // Refresh manually updates the underlying parts of the robot based
 // on its metadata response.
 func (rc *RobotClient) Refresh(ctx context.Context) (err error) {
@@ -274,7 +291,7 @@ func (rc *RobotClient) Refresh(ctx context.Context) (err error) {
 	}
 
 	// call metadata service.
-	names, err := rc.metadataClient.Resources(ctx)
+	names, err := rc.resources(ctx)
 	// only return if it is not unimplemented - means a bigger error came up
 	if err != nil && grpcstatus.Code(err) != codes.Unimplemented {
 		return err
@@ -326,4 +343,96 @@ func (rc *RobotClient) ResourceNames() []resource.Name {
 // Logger returns the logger being used for this robot.
 func (rc *RobotClient) Logger() golog.Logger {
 	return rc.logger
+}
+
+// DiscoverComponents takes a list of discovery queries and returns corresponding
+// component configurations.
+func (rc *RobotClient) DiscoverComponents(ctx context.Context, qs []discovery.Query) ([]discovery.Discovery, error) {
+	pbQueries := make([]*pb.DiscoveryQuery, 0, len(qs))
+	for _, q := range qs {
+		pbQueries = append(
+			pbQueries,
+			&pb.DiscoveryQuery{Subtype: string(q.SubtypeName), Model: q.Model},
+		)
+	}
+
+	resp, err := rc.client.DiscoverComponents(ctx, &pb.DiscoverComponentsRequest{Queries: pbQueries})
+	if err != nil {
+		return nil, err
+	}
+
+	discoveries := make([]discovery.Discovery, 0, len(resp.Discovery))
+	for _, disc := range resp.Discovery {
+		q := discovery.Query{
+			SubtypeName: resource.SubtypeName(disc.Query.Subtype),
+			Model:       disc.Query.Model,
+		}
+		discoveries = append(
+			discoveries, discovery.Discovery{
+				Query:   q,
+				Results: disc.Results.AsMap(),
+			})
+	}
+	return discoveries, nil
+}
+
+// FrameSystemConfig returns the info of each individual part that makes up the frame system.
+func (rc *RobotClient) FrameSystemConfig(ctx context.Context, additionalTransforms []*commonpb.Transform) (framesystemparts.Parts, error) {
+	resp, err := rc.client.FrameSystemConfig(ctx, &pb.FrameSystemConfigRequest{
+		SupplementalTransforms: additionalTransforms,
+	})
+	if err != nil {
+		return nil, err
+	}
+	cfgs := resp.GetFrameSystemConfigs()
+	result := make([]*config.FrameSystemPart, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		part, err := config.ProtobufToFrameSystemPart(cfg)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, part)
+	}
+	return framesystemparts.Parts(result), nil
+}
+
+// TransformPose will transform the pose of the requested poseInFrame to the desired frame in the robot's frame system.
+func (rc *RobotClient) TransformPose(
+	ctx context.Context,
+	query *referenceframe.PoseInFrame,
+	destination string,
+	additionalTransforms []*commonpb.Transform,
+) (*referenceframe.PoseInFrame, error) {
+	resp, err := rc.client.TransformPose(ctx, &pb.TransformPoseRequest{
+		Destination:            destination,
+		Source:                 referenceframe.PoseInFrameToProtobuf(query),
+		SupplementalTransforms: additionalTransforms,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return referenceframe.ProtobufToPoseInFrame(resp.Pose), nil
+}
+
+// GetStatus takes a list of resource names and returns their corresponding statuses. If no names are passed in, return all statuses.
+func (rc *RobotClient) GetStatus(ctx context.Context, resourceNames []resource.Name) ([]robot.Status, error) {
+	names := make([]*commonpb.ResourceName, 0, len(resourceNames))
+	for _, name := range resourceNames {
+		names = append(names, protoutils.ResourceNameToProto(name))
+	}
+
+	resp, err := rc.client.GetStatus(ctx, &pb.GetStatusRequest{ResourceNames: names})
+	if err != nil {
+		return nil, err
+	}
+
+	statuses := make([]robot.Status, 0, len(resp.Status))
+	for _, status := range resp.Status {
+		statuses = append(
+			statuses, robot.Status{
+				Name:   protoutils.ResourceNameFromProto(status.Name),
+				Status: status.Status.AsMap(),
+			})
+	}
+	return statuses, nil
 }

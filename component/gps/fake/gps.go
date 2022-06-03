@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/edaniels/golog"
+	"github.com/golang/geo/r3"
 	geo "github.com/kellydunn/golang-geo"
 	"github.com/pkg/errors"
 
@@ -136,7 +137,7 @@ type interceptingGPSBase struct {
 	bearing float64 // [0-360)
 }
 
-func newInterceptingGPSBase(r robot.Robot, c config.Component) (*interceptingGPSBase, error) {
+func newInterceptingGPSBase(r robot.Robot, c config.Component) (base.LocalBase, error) {
 	baseName := c.Attributes.String("base")
 	if baseName == "" {
 		return nil, errors.New("'base' name must be set")
@@ -183,11 +184,6 @@ func (b *interceptingGPSBase) MoveStraight(ctx context.Context, distanceMm int, 
 	return nil
 }
 
-// MoveArc allows the motion along an arc defined by speed, distance and angular velocity (TBD).
-func (b *interceptingGPSBase) MoveArc(ctx context.Context, distanceMm int, mmPerSec float64, angleDeg float64) error {
-	return nil
-}
-
 func (b *interceptingGPSBase) Spin(ctx context.Context, angleDeg float64, degsPerSec float64) error {
 	err := b.b.Spin(ctx, angleDeg, degsPerSec)
 	if err != nil {
@@ -202,5 +198,13 @@ func (b *interceptingGPSBase) GetWidth(ctx context.Context) (int, error) {
 }
 
 func (b *interceptingGPSBase) Stop(ctx context.Context) error {
+	return nil
+}
+
+func (b *interceptingGPSBase) SetPower(ctx context.Context, linear, angular r3.Vector) error {
+	return nil
+}
+
+func (b *interceptingGPSBase) SetVelocity(ctx context.Context, linear, angular r3.Vector) error {
 	return nil
 }
