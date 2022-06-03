@@ -28,7 +28,7 @@
 			"id": "pin_link",
 			"parent": "pin",
 			"translation": {"x": 0.0, "y":0, "z":0.00},
-			"orientation": {"type": "euler_angles", "value": {"roll":  0, "pitch": 0.39, "yaw":0}},
+			"orientation": {"type": "euler_angles", "value": {"roll":  0, "pitch": 0.78, "yaw":0}},
 			"geometry": {
 				"x": 0.015, "y":0.015, "z":0.001, 
 				"translation": {"x":0.0, "y":0, "z":-0.0755},
@@ -46,7 +46,7 @@
 			"max": 0
 		},
 		{
-			"id": "pin",
+			"id": "extend",
 			"parent": "inner_body_link",
 			"type" : "revolute",
 			"axis": {"x":1, "y":0, "z":0},
