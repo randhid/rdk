@@ -3,7 +3,6 @@ package varm
 
 import (
 	"context"
-
 	// for embedding model file.
 	_ "embed"
 	"math"
@@ -329,6 +328,11 @@ func (a *armV1) GetJointPositions(ctx context.Context) (*componentpb.JointPositi
 
 	joints.Degrees[1] = (joints.Degrees[1] - joints.Degrees[0])
 	return joints, multierr.Combine(e1, e2)
+}
+
+func (a *armV1) Stop(ctx context.Context) error {
+	// RSDK-374: Implement Stop
+	return arm.ErrStopUnimplemented
 }
 
 func (a *armV1) ModelFrame() referenceframe.Model {

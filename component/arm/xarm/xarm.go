@@ -3,7 +3,6 @@ package xarm
 
 import (
 	"context"
-
 	// for embedding model file.
 	_ "embed"
 	"errors"
@@ -39,6 +38,7 @@ type xArm struct {
 	moveLock *sync.Mutex
 	mp       motionplan.MotionPlanner
 	model    referenceframe.Model
+	started  bool
 	opMgr    operation.SingleOperationManager
 }
 
@@ -115,6 +115,7 @@ func NewxArm(ctx context.Context, cfg config.Component, logger golog.Logger, dof
 		moveLock: mutex,
 		mp:       mp,
 		model:    model,
+		started:  false,
 	}
 
 	err = xA.start(ctx)

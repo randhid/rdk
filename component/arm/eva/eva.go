@@ -4,7 +4,6 @@ package eva
 import (
 	"bytes"
 	"context"
-
 	// for embedding model file.
 	_ "embed"
 	"encoding/json"
@@ -285,6 +284,11 @@ func (e *eva) resetErrors(ctx context.Context) error {
 	}
 	utils.SelectContextOrWait(ctx, 100*time.Millisecond)
 	return ctx.Err()
+}
+
+func (e *eva) Stop(ctx context.Context) error {
+	// RSDK-374: Implement Stop
+	return arm.ErrStopUnimplemented
 }
 
 func (e *eva) DataSnapshot(ctx context.Context) (evaData, error) {
