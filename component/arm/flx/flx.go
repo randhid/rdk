@@ -3,6 +3,7 @@ package flx
 
 import (
 	"context"
+	"math"
 	exec "os/exec"
 	"strings"
 
@@ -11,7 +12,6 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/edaniels/golog"
 	"github.com/pkg/errors"
@@ -20,6 +20,7 @@ import (
 	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/motionplan"
+	"go.viam.com/rdk/operation"
 	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	pb "go.viam.com/rdk/proto/api/component/arm/v1"
 	"go.viam.com/rdk/referenceframe"
@@ -27,16 +28,17 @@ import (
 	"go.viam.com/rdk/robot"
 )
 
-const (
-	modelname = "flx"
-)
-
 // AttrConfig is used for converting attributes.
 type AttrConfig struct {
 	Host      string `json:"host"`
 	NumFlxSeg int    `json:"number_of_flx_segments"`
 	Mode      string `json:"flxbot_mode"`
+	InPlane   bool   `json:"move_in_plane"`
 }
+
+const (
+	modelname = "flxarm"
+)
 
 //go:embed flxbot_segment_SVA.json
 var flxbotSegmentjson []byte
@@ -53,13 +55,16 @@ const (
 
 type flxArm struct {
 	generic.Unimplemented
-	host     string
-	model    referenceframe.Model
-	mode     flxbotmode
-	numSeg   int
-	mp       motionplan.MotionPlanner
-	moveLock *sync.Mutex
-	logger   golog.Logger
+	host    string
+	model   referenceframe.Model
+	mode    flxbotmode
+	numSeg  int
+	mp      motionplan.MotionPlanner
+	mu      *sync.Mutex
+	logger  golog.Logger
+	moving  bool
+	opMgr   operation.SingleOperationManager
+	inPlane bool
 }
 
 func init() {
@@ -92,7 +97,8 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 		host:          flxconf.Host,
 		mode:          flxbotmode(flxconf.Mode),
 		numSeg:        flxconf.NumFlxSeg,
-		moveLock:      &sync.Mutex{},
+		inPlane:       flxconf.InPlane,
+		mu:            &sync.Mutex{},
 		logger:        logger,
 	}
 
@@ -113,11 +119,19 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 		}
 	}
 
-	mp, err := motionplan.NewCBiRRTMotionPlanner(newArm.model, 4, logger)
-	if err != nil {
-		return nil, err
+	if newArm.inPlane {
+		mp, err := motionplan.NewFLXMotionPlanner(newArm.model, 4, logger)
+		if err != nil {
+			return nil, err
+		}
+		newArm.mp = mp
+	} else {
+		mp, err := motionplan.NewCBiRRTMotionPlanner(newArm.model, 4, logger)
+		if err != nil {
+			return nil, err
+		}
+		newArm.mp = mp
 	}
-	newArm.mp = mp
 
 	return newArm, nil
 }
@@ -166,6 +180,9 @@ func (flx *flxArm) ModelFrame() referenceframe.Model {
 }
 
 func (flx *flxArm) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
+	flx.mu.Lock()
+	defer flx.mu.Unlock()
+
 	joints, err := flx.GetJointPositions(ctx)
 	if err != nil {
 		return nil, err
@@ -174,30 +191,93 @@ func (flx *flxArm) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
 }
 
 func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, worldState *commonpb.WorldState) error {
-	joints, err := flx.GetJointPositions(ctx)
+	ctx, done := flx.opMgr.New(ctx)
+	defer done()
+
+	startJoints, err := flx.GetJointPositions(ctx)
 	if err != nil {
 		return err
 	}
 
-	start := time.Now()
-	solution, err := flx.mp.Plan(ctx, pos, referenceframe.JointPosToInputs(joints), nil)
-	if err != nil {
-		return err
+	// //iterate over in plane plan.
+	// startPos, err := flx.GetEndPosition(ctx)
+	// if err != nil {
+	// 	return err
+	// }
+
+	var solution [][]referenceframe.Input
+	if flx.inPlane {
+		//iterate over in plane plan. put things in driver
+		sol, err := flx.mp.Plan(ctx, pos, referenceframe.FloatsToInputs(startJoints.Degrees), nil)
+		if err != nil {
+			return err
+		}
+		solution = sol
+	} else {
+		// change to cbirrt with plane constraint
+		opt := &motionplan.PlannerOptions{}
+
+		sol, err := flx.mp.Plan(ctx, pos, referenceframe.JointPosToInputs(startJoints), opt)
+		if err != nil {
+			return err
+		}
+		solution = sol
+
 	}
 
-	if time.Since(start) > 2*time.Second {
-		return errors.Errorf("flx took too long to solve for new position %v", time.Since(start))
-	}
 	return arm.GoToWaypoints(ctx, flx, solution)
 }
 
+func GetAngles(startAngle, endAngle, tarVel, tarAcc, dt float64) []float64 {
+	currVel := 0.0
+	angles := []float64{startAngle}
+
+	var dir float64
+	if endAngle > startAngle {
+		dir = 1
+	} else {
+		dir = -1
+	}
+	for currVel < tarVel {
+		idxEnd := len(angles) - 1
+		angles = append(angles, angles[idxEnd]+dir*currVel*dt+dir*tarAcc*0.5*dt*dt)
+		currVel = tarVel
+		angleDiff := math.Abs(angles[idxEnd] - angles[0])
+		for math.Abs(endAngle-angles[idxEnd]) > angleDiff {
+			angles = append(angles, dir*tarVel*dt)
+		}
+		for currVel*dir > 0 {
+			angles = append(angles, angles[idxEnd]+dir*currVel*dt+dir*tarAcc*0.5*dt*dt)
+			currVel = math.Max(currVel-tarAcc*dt, 0.0)
+		}
+	}
+	angles = append(angles, endAngle)
+	return angles
+}
+
+func (flx *flxArm) GoToInputs(ctx context.Context, goal []referenceframe.Input) error {
+	return flx.MoveToJointPositions(ctx, referenceframe.InputsToJointPos(goal))
+}
+
 func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.JointPositions) error {
+	ctx, done := flx.opMgr.New(ctx)
+	defer done()
+
+	flx.mu.Lock()
+	defer flx.mu.Unlock()
+
 	positions := newPositions.GetDegrees()
+	if len(positions) != len(newPositions.Degrees) {
+		return errors.New("joint position mismatch for flxbot")
+	}
 	positionsStr := ""
+
 	for _, pos := range positions {
 		positionsStr += fmt.Sprintf("%f ", pos)
 	}
+
 	cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "10", "10")
+	// cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "10", "10")
 	return cmd.Run()
 }
 
@@ -244,6 +324,24 @@ func (flx *flxArm) CurrentInputs(ctx context.Context) ([]referenceframe.Input, e
 	return referenceframe.JointPosToInputs(res), nil
 }
 
-func (flx *flxArm) GoToInputs(ctx context.Context, goal []referenceframe.Input) error {
-	return flx.MoveToJointPositions(ctx, referenceframe.InputsToJointPos(goal))
+func (flx *flxArm) Stop(ctx context.Context) error {
+	positions, err := flx.GetJointPositions(ctx)
+	if err != nil {
+		return err
+	}
+
+	positionsStr := ""
+	for _, pos := range positions.Degrees {
+		positionsStr += fmt.Sprintf("%f ", pos)
+	}
+
+	cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "0", "0")
+	return cmd.Run()
+
 }
+
+func (flx *flxArm) IsMoving() bool {
+	return flx.opMgr.OpRunning()
+}
+
+// IMPLEMENT GETCOMPONENTS?
