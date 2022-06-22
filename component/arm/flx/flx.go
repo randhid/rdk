@@ -30,14 +30,13 @@ import (
 
 // AttrConfig is used for converting attributes.
 type AttrConfig struct {
-	Host      string `json:"host"`
 	NumFlxSeg int    `json:"number_of_flx_segments"`
 	Mode      string `json:"flxbot_mode"`
 	InPlane   bool   `json:"move_in_plane"`
 }
 
 const (
-	modelname = "flxarm"
+	modelname = "flx"
 )
 
 //go:embed flxbot_segment_SVA.json
@@ -94,7 +93,6 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 
 	newArm := &flxArm{
 		Unimplemented: generic.Unimplemented{},
-		host:          flxconf.Host,
 		mode:          flxbotmode(flxconf.Mode),
 		numSeg:        flxconf.NumFlxSeg,
 		inPlane:       flxconf.InPlane,
