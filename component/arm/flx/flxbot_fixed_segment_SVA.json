@@ -26,7 +26,7 @@
 		},
 		{
 			"id": "pin_link",
-			"parent": "pin",
+			"parent": "extend",
 			"translation": {"x": 0.0, "y":0, "z":0.00},
 			"orientation": {"type": "euler_angles", "value": {"roll":  0, "pitch": 0.78, "yaw":0}},
 			"geometry": {
