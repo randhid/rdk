@@ -33,6 +33,7 @@ type AttrConfig struct {
 	NumFlxSeg int    `json:"number_of_flx_segments"`
 	Mode      string `json:"flxbot_mode"`
 	InPlane   bool   `json:"move_in_plane"`
+	Debug     bool   `json:"debug"`
 }
 
 const (
@@ -58,6 +59,7 @@ type flxArm struct {
 	model   referenceframe.Model
 	mode    flxbotmode
 	numSeg  int
+	debug   bool
 	mp      motionplan.MotionPlanner
 	mu      *sync.Mutex
 	logger  golog.Logger
@@ -96,6 +98,7 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 		mode:          flxbotmode(flxconf.Mode),
 		numSeg:        flxconf.NumFlxSeg,
 		inPlane:       flxconf.InPlane,
+		debug:         flxconf.Debug,
 		mu:            &sync.Mutex{},
 		logger:        logger,
 	}
@@ -274,23 +277,31 @@ func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.Jo
 		positionsStr += fmt.Sprintf("%f ", pos)
 	}
 
-	cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "10", "10")
-	// cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "10", "10")
-	return cmd.Run()
+	if flx.debug == true {
+		return nil
+	} else {
+		cmd := exec.Command("python", "flxbot_move_to_joint_position.py", positionsStr, "10", "10")
+		return cmd.Run()
+	}
+
 }
 
 func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
-	cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
-	err := cmd.Run()
 
-	out, err := cmd.CombinedOutput()
-	fmt.Println(out)
+	var out string
+	if flx.debug == false {
+		cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
+		err := cmd.Run()
 
-	if err != nil {
-		return nil, err
+		vals, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, err
+		}
+		out = string(vals)
+	} else {
+		out = string("0 0 0 0 0 0 0")
 	}
-	// out := string("0 0 0 0 0 0 0")
-	posStrings := strings.Split(string(out), " ")
+	posStrings := strings.Split(out, " ")
 
 	result := &pb.JointPositions{}
 	degs := make([]float64, 0, len(posStrings))
