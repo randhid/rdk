@@ -1,0 +1,23 @@
+{
+  "components": [
+    {
+      "attributes": {
+        "debug": true,
+        "flxbot_mode": "foab",
+        "move_in_plane": true,
+        "number_of_segments": 2
+      },
+      "depends_on": [],
+      "model": "flx",
+      "name": "foab",
+      "service_config": [],
+      "type": "arm"
+    }
+  ],
+  "network": {
+    "bind_address": ":8282",
+    "fqdn": "",
+    "tls_cert_file": "",
+    "tls_key_file": ""
+  }
+}

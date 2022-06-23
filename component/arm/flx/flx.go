@@ -103,6 +103,8 @@ func newFLX(ctx context.Context, cfg config.Component, logger golog.Logger) (arm
 		logger:        logger,
 	}
 
+	fmt.Println(newArm.mode)
+
 	switch newArm.mode {
 	case flxfoab:
 		model, err := foabModel()
@@ -188,7 +190,7 @@ func (flx *flxArm) GetEndPosition(ctx context.Context) (*commonpb.Pose, error) {
 	if err != nil {
 		return nil, err
 	}
-	return motionplan.ComputePosition(flx.mp.Frame(), joints)
+	return motionplan.ComputePosition(flx.model, joints)
 }
 
 func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, worldState *commonpb.WorldState) error {
@@ -200,15 +202,9 @@ func (flx *flxArm) MoveToPosition(ctx context.Context, pos *commonpb.Pose, world
 		return err
 	}
 
-	// //iterate over in plane plan.
-	// startPos, err := flx.GetEndPosition(ctx)
-	// if err != nil {
-	// 	return err
-	// }
-
 	var solution [][]referenceframe.Input
 	if flx.inPlane {
-		//iterate over in plane plan. put things in driver
+		// iterate over in plane plan. put things in driver
 		sol, err := flx.mp.Plan(ctx, pos, referenceframe.FloatsToInputs(startJoints.Degrees), nil)
 		if err != nil {
 			return err
@@ -288,41 +284,38 @@ func (flx *flxArm) MoveToJointPositions(ctx context.Context, newPositions *pb.Jo
 
 func (flx *flxArm) GetJointPositions(ctx context.Context) (*pb.JointPositions, error) {
 
-	var out string
 	if flx.debug == false {
 		cmd := exec.Command("python", "flxbot_python/flxbot_state.py")
 		err := cmd.Run()
 
-		vals, err := cmd.CombinedOutput()
+		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return nil, err
 		}
-		out = string(vals)
+		posStrings := strings.Split(string(out), " ")
+		result := &pb.JointPositions{}
+		degs := make([]float64, 0, len(posStrings))
+		for i, posStr := range posStrings {
+			pos, err := strconv.ParseFloat(posStr, 64)
+			if err != nil {
+				return nil, err
+			}
+			degs[i] = pos
+		}
+		result.Degrees = degs
+		return nil, nil
 	} else {
-		out = string("0 0 0 0 0 0 0")
-	}
-	posStrings := strings.Split(out, " ")
-
-	result := &pb.JointPositions{}
-	degs := make([]float64, 0, len(posStrings))
-	for i, posStr := range posStrings {
-		pos, err := strconv.ParseFloat(posStr, 64)
-		if err != nil {
-			return nil, err
+		degs := make([]float64, len(flx.model.DoF()))
+		for i := 0; i < cap(degs); i++ {
+			if i < 2 {
+				degs[i] = 0
+			} else {
+				degs[i] = float64(i)
+			}
 		}
-		degs[i] = pos
+		return &pb.JointPositions{Degrees: degs}, nil
 	}
-	result.Degrees = degs
-	return result, nil
-	// degs := make([]float64, len(flx.model.DoF()))
-	// for i := 0; i < cap(degs); i++ {
-	// 	if i < 2 {
-	// 		degs[i] = 0
-	// 	} else {
-	// 		degs[i] = float64(i)
-	// 	}
-	// }
-	// return &pb.JointPositions{Degrees: degs}, nil
+
 }
 
 func (flx *flxArm) CurrentInputs(ctx context.Context) ([]referenceframe.Input, error) {

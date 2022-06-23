@@ -50,7 +50,7 @@
 			"parent": "inner_body_link",
 			"type" : "prismatic",
 			"axis": {"x":1, "y":0, "z":0},
-			"max":0,
+			"max":10,
 			"min":0
 		}
 	]
