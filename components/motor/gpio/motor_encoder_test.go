@@ -263,7 +263,6 @@ func TestMotorEncoder1(t *testing.T) {
 	})
 }
 
-
 func TestMotorEncoderIncremental(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 	undo := SetRPMSleepDebug(1, false)
@@ -491,6 +490,7 @@ func TestMotorEncoderIncremental(t *testing.T) {
 		encoderB := th.EncoderB
 		realMotor := th.RealMotor
 		motor := th.Motor
+
 		err := motor.goForInternal(context.Background(), 100, 1)
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, realMotor.Direction(), test.ShouldEqual, 1)
