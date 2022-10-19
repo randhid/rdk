@@ -15,6 +15,7 @@ import (
 	"go.viam.com/rdk/components/board"
 	fakeboard "go.viam.com/rdk/components/board/fake"
 	"go.viam.com/rdk/components/encoder"
+	"go.viam.com/rdk/components/encoder/fake"
 	"go.viam.com/rdk/components/motor"
 	fakemotor "go.viam.com/rdk/components/motor/fake"
 	"go.viam.com/rdk/config"
@@ -37,7 +38,7 @@ func TestMotorEncoder1(t *testing.T) {
 	undo := SetRPMSleepDebug(1, false)
 	defer undo()
 
-	cfg := Config{TicksPerRotation: 100, MaxRPM: 100}
+	cfg := Config{TicksPerRotation: 100, MaxRPM: 100, DirectionFlip: true}
 	fakeMotor := &fakemotor.Motor{
 		MaxRPM:           100,
 		Logger:           logger,
@@ -277,11 +278,12 @@ func TestMotorEncoderIncremental(t *testing.T) {
 	}
 	setup := func(t *testing.T) testHarness {
 		t.Helper()
-		cfg := Config{TicksPerRotation: 100, MaxRPM: 100}
+		cfg := Config{TicksPerRotation: 100, MaxRPM: 100, DirectionFlip: true}
 		fakeMotor := &fakemotor.Motor{
 			MaxRPM:           100,
 			Logger:           logger,
 			TicksPerRotation: 100,
+			Encoder:          &fake.Encoder{},
 		}
 		encoderA := &board.BasicDigitalInterrupt{}
 		encoderB := &board.BasicDigitalInterrupt{}
@@ -488,7 +490,6 @@ func TestMotorEncoderIncremental(t *testing.T) {
 		encoderB := th.EncoderB
 		realMotor := th.RealMotor
 		motor := th.Motor
-
 		err := motor.goForInternal(context.Background(), 100, 1)
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, realMotor.Direction(), test.ShouldEqual, 1)

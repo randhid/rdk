@@ -39,6 +39,7 @@ type Config struct {
 	Encoder          string    `json:"encoder,omitempty"`
 	MaxRPM           float64   `json:"max_rpm,omitempty"`
 	TicksPerRotation int       `json:"ticks_per_rotation,omitempty"`
+	DirectionFlip    bool      `json:"direction_flip,omitempty"`
 }
 
 func init() {
@@ -63,6 +64,7 @@ func init() {
 					}
 				}
 				m.MaxRPM = mcfg.MaxRPM
+				m.dirflip = mcfg.DirectionFlip
 
 				if mcfg.Encoder != "" {
 					if mcfg.TicksPerRotation <= 0 {
@@ -112,6 +114,7 @@ type Motor struct {
 	MaxRPM            float64
 	opMgr             operation.SingleOperationManager
 	TicksPerRotation  int
+	dirflip           bool
 	generic.Echo
 }
 
@@ -160,6 +163,9 @@ func (m *Motor) SetPower(ctx context.Context, powerPct float64, extra map[string
 		if m.TicksPerRotation <= 0 {
 			return errors.New("need positive nonzero TicksPerRotation")
 		}
+		if m.dirflip {
+			m.powerPct *= -1
+		}
 
 		newSpeed := (m.MaxRPM * m.powerPct) * float64(m.TicksPerRotation)
 		err := m.Encoder.SetSpeed(ctx, newSpeed)
@@ -185,13 +191,22 @@ func (m *Motor) PowerPct() float64 {
 func (m *Motor) Direction() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.powerPct > 0 {
-		return 1
+	var dir int
+	if m.powerPct >= 0 {
+		dir = 1
 	}
 	if m.powerPct < 0 {
-		return -1
+		dir = -1
+	} else {
+		dir = 0
 	}
-	return 0
+
+	if m.dirflip {
+		dir = -1 * dir
+	}
+
+	return dir
+
 }
 
 // If revolutions is 0, the returned wait duration will be 0 representing that
