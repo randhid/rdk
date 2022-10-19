@@ -279,7 +279,7 @@ func (m *EncodedMotor) setPower(ctx context.Context, powerPct float64, internal 
 // RPMMonitorStart starts the RPM monitor.
 func (m *EncodedMotor) RPMMonitorStart() {
 	m.startedRPMMonitorMu.Lock()
-	defer m.startedRPMMonitorMu.Unlock()
+	m.startedRPMMonitorMu.Unlock()
 	if m.startedRPMMonitor {
 		return
 	}
