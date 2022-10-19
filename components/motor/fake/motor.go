@@ -191,21 +191,20 @@ func (m *Motor) PowerPct() float64 {
 func (m *Motor) Direction() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var dir int
-	if m.powerPct >= 0 {
-		dir = 1
+	var flip int
+	if m.dirflip {
+		flip = -1
+	} else {
+		flip = 1
+	}
+
+	if m.powerPct > 0 {
+		return flip
 	}
 	if m.powerPct < 0 {
-		dir = -1
-	} else {
-		dir = 0
+		return -flip
 	}
-
-	if m.dirflip {
-		dir = -1 * dir
-	}
-
-	return dir
+	return 0
 
 }
 
