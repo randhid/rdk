@@ -38,7 +38,7 @@ func TestMotorEncoder1(t *testing.T) {
 	undo := SetRPMSleepDebug(1, false)
 	defer undo()
 
-	cfg := Config{TicksPerRotation: 100, MaxRPM: 100, DirectionFlip: true}
+	cfg := Config{TicksPerRotation: 100, MaxRPM: 100}//, DirectionFlip: true
 	fakeMotor := &fakemotor.Motor{
 		MaxRPM:           100,
 		Logger:           logger,
@@ -263,6 +263,7 @@ func TestMotorEncoder1(t *testing.T) {
 	})
 }
 
+
 func TestMotorEncoderIncremental(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 	undo := SetRPMSleepDebug(1, false)
@@ -278,7 +279,7 @@ func TestMotorEncoderIncremental(t *testing.T) {
 	}
 	setup := func(t *testing.T) testHarness {
 		t.Helper()
-		cfg := Config{TicksPerRotation: 100, MaxRPM: 100, DirectionFlip: true}
+		cfg := Config{TicksPerRotation: 100, MaxRPM: 100}//, DirectionFlip: true
 		fakeMotor := &fakemotor.Motor{
 			MaxRPM:           100,
 			Logger:           logger,
