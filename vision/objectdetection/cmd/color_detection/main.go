@@ -1,20 +1,18 @@
+// Package main is a color detection tool.
 package main
 
 import (
 	"context"
 	"flag"
 	"image"
-	"net"
-	"net/url"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/edaniels/golog"
 	"github.com/edaniels/gostream"
 
-	"go.viam.com/rdk/component/camera"
-	"go.viam.com/rdk/component/camera/imagesource"
+	"go.viam.com/rdk/components/camera"
+	"go.viam.com/rdk/components/camera/videosource"
 	"go.viam.com/rdk/rimage"
 	"go.viam.com/rdk/vision/objectdetection"
 )
@@ -23,7 +21,7 @@ type simpleSource struct {
 	filePath string
 }
 
-func (s *simpleSource) Next(ctx context.Context) (image.Image, func(), error) {
+func (s *simpleSource) Read(ctx context.Context) (image.Image, func(), error) {
 	img, err := rimage.NewImageFromFile(s.filePath)
 	return img, func() {}, err
 }
@@ -31,7 +29,9 @@ func (s *simpleSource) Next(ctx context.Context) (image.Image, func(), error) {
 func main() {
 	imgPtr := flag.String("img", "", "path to image to apply simple detection to")
 	urlPtr := flag.String("url", "", "url to image source to apply simple detection to")
-	threshPtr := flag.Float64("thresh", .1, "the tolerance around the selected color")
+	threshPtr := flag.Float64("thresh", .1, "the hue tolerance around the selected color")
+	satPtr := flag.Float64("sat", .1, "the minimum saturation cutoff")
+	valPtr := flag.Float64("val", .1, "the minimum value cutoff")
 	sizePtr := flag.Int("size", 500, "minimum size of a detection")
 	streamPtr := flag.String("stream", "color", "type of url stream")
 	colorPtr := flag.String("color", "#416C1C", "color as a hex string")
@@ -45,50 +45,34 @@ func main() {
 	}
 	if *imgPtr != "" {
 		src := &simpleSource{*imgPtr}
-		cam, err := camera.New(src, nil, nil)
+		cam, err := camera.NewFromReader(context.Background(), src, nil, camera.UnspecifiedStream)
 		if err != nil {
 			logger.Fatal(err)
 		}
-		pipeline(cam, *threshPtr, *sizePtr, *colorPtr, logger)
+		pipeline(cam, *threshPtr, *satPtr, *valPtr, *sizePtr, *colorPtr, logger)
 	} else {
-		u, err := url.Parse(*urlPtr)
-		if err != nil {
-			logger.Fatal(err)
-		}
-		logger.Infof("url parse: %v", u)
-		host, port, err := net.SplitHostPort(u.Host)
-		if err != nil {
-			logger.Fatal(err)
-		}
-		args := u.Path + "?" + u.RawQuery
-		logger.Infof("host: %s, port: %s, args: %s", host, port, args)
-		portNum, err := strconv.ParseInt(port, 0, 32)
-		if err != nil {
-			logger.Fatal(err)
-		}
-		cfg := &imagesource.ServerAttrs{
-			Host:    host,
-			Port:    int(portNum),
-			Args:    args,
-			Aligned: false,
+		cfg := &videosource.ServerAttrs{
+			URL: *urlPtr,
 			AttrConfig: &camera.AttrConfig{
 				Stream: *streamPtr,
 			},
 		}
-		src, err := imagesource.NewServerSource(cfg, logger)
+		src, err := videosource.NewServerSource(context.Background(), cfg, logger)
 		if err != nil {
 			logger.Fatal(err)
 		}
-		pipeline(src, *threshPtr, *sizePtr, *colorPtr, logger)
+		pipeline(src, *threshPtr, *satPtr, *valPtr, *sizePtr, *colorPtr, logger)
 	}
 	logger.Info("Done")
 	os.Exit(0)
 }
 
-func pipeline(src gostream.ImageSource, tol float64, size int, colorString string, logger golog.Logger) {
+func pipeline(src gostream.VideoSource, tol, sat, val float64, size int, colorString string, logger golog.Logger) {
 	detCfg := &objectdetection.ColorDetectorConfig{
 		SegmentSize:       size,
-		Tolerance:         tol,
+		HueTolerance:      tol,
+		SaturationCutoff:  sat,
+		ValueCutoff:       val,
 		DetectColorString: colorString,
 	}
 	// create detector

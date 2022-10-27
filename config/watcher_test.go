@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -18,6 +16,7 @@ import (
 	"go.viam.com/test"
 	"go.viam.com/utils"
 	"go.viam.com/utils/pexec"
+	"go.viam.com/utils/testutils"
 
 	"go.viam.com/rdk/resource"
 )
@@ -41,7 +40,7 @@ func TestNewWatcherNoop(t *testing.T) {
 func TestNewWatcherFile(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 
-	temp, err := ioutil.TempFile("", "*.json")
+	temp, err := os.CreateTemp("", "*.json")
 	test.That(t, err, test.ShouldBeNil)
 	defer os.Remove(temp.Name())
 
@@ -51,9 +50,9 @@ func TestNewWatcherFile(t *testing.T) {
 	writeConf := func(conf *Config) {
 		md, err := json.Marshal(&conf)
 		test.That(t, err, test.ShouldBeNil)
-		test.That(t, ioutil.WriteFile(temp.Name(), md, 0o755), test.ShouldBeNil)
+		test.That(t, os.WriteFile(temp.Name(), md, 0o755), test.ShouldBeNil)
 		for {
-			rd, err := ioutil.ReadFile(temp.Name())
+			rd, err := os.ReadFile(temp.Name())
 			test.That(t, err, test.ShouldBeNil)
 			if bytes.Equal(rd, md) {
 				break
@@ -159,10 +158,7 @@ func TestNewWatcherFile(t *testing.T) {
 func TestNewWatcherCloud(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 
-	randomPort, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", randomPort))
-	test.That(t, err, test.ShouldBeNil)
+	listener := testutils.ReserveRandomListener(t)
 	httpServer := &http.Server{
 		ReadTimeout:    10 * time.Second,
 		MaxHeaderBytes: 1 << 20,

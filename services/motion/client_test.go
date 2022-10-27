@@ -9,16 +9,16 @@ import (
 	"github.com/edaniels/golog"
 	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
+	commonpb "go.viam.com/api/common/v1"
+	servicepb "go.viam.com/api/service/motion/v1"
 	"go.viam.com/test"
 	"go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 	"google.golang.org/grpc"
 
-	"go.viam.com/rdk/component/arm"
-	"go.viam.com/rdk/component/gripper"
+	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/gripper"
 	viamgrpc "go.viam.com/rdk/grpc"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	servicepb "go.viam.com/rdk/proto/api/service/motion/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/resource"
@@ -38,7 +38,7 @@ func TestClient(t *testing.T) {
 
 	injectMS := &inject.MotionService{}
 	omMap := map[resource.Name]interface{}{
-		motion.Name: injectMS,
+		motion.Named(testMotionServiceName): injectMS,
 	}
 	svc, err := subtype.New(omMap)
 	test.That(t, err, test.ShouldBeNil)
@@ -66,7 +66,7 @@ func TestClient(t *testing.T) {
 
 		test.That(t, err, test.ShouldBeNil)
 
-		client := motion.NewClientFromConn(context.Background(), conn, "", logger)
+		client := motion.NewClientFromConn(context.Background(), conn, testMotionServiceName, logger)
 
 		receivedTransforms := make(map[string]*commonpb.Transform)
 		success := true
@@ -75,6 +75,7 @@ func TestClient(t *testing.T) {
 			componentName resource.Name,
 			destination *referenceframe.PoseInFrame,
 			worldState *commonpb.WorldState,
+			extra map[string]interface{},
 		) (bool, error) {
 			return success, nil
 		}
@@ -83,6 +84,7 @@ func TestClient(t *testing.T) {
 			componentName resource.Name,
 			destinationFrame string,
 			supplementalTransforms []*commonpb.Transform,
+			extra map[string]interface{},
 		) (*referenceframe.PoseInFrame, error) {
 			for _, msg := range supplementalTransforms {
 				receivedTransforms[msg.GetReferenceFrame()] = msg
@@ -93,15 +95,14 @@ func TestClient(t *testing.T) {
 
 		result, err := client.Move(
 			context.Background(), resourceName, grabPose,
-			&commonpb.WorldState{},
+			&commonpb.WorldState{}, map[string]interface{}{},
 		)
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, result, test.ShouldEqual, success)
 
-		testPose := spatialmath.NewPoseFromAxisAngle(
+		testPose := spatialmath.NewPoseFromOrientation(
 			r3.Vector{X: 1., Y: 2., Z: 3.},
-			r3.Vector{X: 0., Y: 1., Z: 0.},
-			math.Pi/2,
+			&spatialmath.R4AA{Theta: math.Pi / 2, RX: 0., RY: 1., RZ: 0.},
 		)
 		transformMsgs := []*commonpb.Transform{
 			{
@@ -123,7 +124,7 @@ func TestClient(t *testing.T) {
 		for _, msg := range transformMsgs {
 			msgMap[msg.GetReferenceFrame()] = msg
 		}
-		poseResult, err := client.GetPose(context.Background(), arm.Named("arm1"), "foo", transformMsgs)
+		poseResult, err := client.GetPose(context.Background(), arm.Named("arm1"), "foo", transformMsgs, map[string]interface{}{})
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, poseResult.FrameName(), test.ShouldEqual, "fooarm1")
 		test.That(t, poseResult.Pose().Point().X, test.ShouldEqual, 1)
@@ -154,7 +155,7 @@ func TestClient(t *testing.T) {
 	t.Run("motion client 2", func(t *testing.T) {
 		conn, err := viamgrpc.Dial(context.Background(), listener1.Addr().String(), logger)
 		test.That(t, err, test.ShouldBeNil)
-		client := resourceSubtype.RPCClient(context.Background(), conn, "", logger)
+		client := resourceSubtype.RPCClient(context.Background(), conn, testMotionServiceName, logger)
 		client2, ok := client.(motion.Service)
 		test.That(t, ok, test.ShouldBeTrue)
 
@@ -164,6 +165,7 @@ func TestClient(t *testing.T) {
 			componentName resource.Name,
 			grabPose *referenceframe.PoseInFrame,
 			worldState *commonpb.WorldState,
+			extra map[string]interface{},
 		) (bool, error) {
 			return false, passedErr
 		}
@@ -173,16 +175,18 @@ func TestClient(t *testing.T) {
 			componentName resource.Name,
 			destinationFrame string,
 			supplementalTransform []*commonpb.Transform,
+			extra map[string]interface{},
 		) (*referenceframe.PoseInFrame, error) {
 			return nil, passedErr
 		}
 
-		resp, err := client2.Move(context.Background(), resourceName, grabPose, &commonpb.WorldState{})
+		resp, err := client2.Move(context.Background(), resourceName, grabPose, &commonpb.WorldState{}, map[string]interface{}{})
 		test.That(t, err.Error(), test.ShouldContainSubstring, passedErr.Error())
 		test.That(t, resp, test.ShouldEqual, false)
-		_, err = client2.GetPose(context.Background(), arm.Named("arm1"), "foo", nil)
+		_, err = client2.GetPose(context.Background(), arm.Named("arm1"), "foo", nil, map[string]interface{}{})
 		test.That(t, err.Error(), test.ShouldContainSubstring, passedErr.Error())
 		test.That(t, utils.TryClose(context.Background(), client2), test.ShouldBeNil)
+		test.That(t, conn.Close(), test.ShouldBeNil)
 	})
 }
 
@@ -194,7 +198,7 @@ func TestClientDialerOption(t *testing.T) {
 
 	injectMS := &inject.MotionService{}
 	omMap := map[resource.Name]interface{}{
-		motion.Name: injectMS,
+		motion.Named(testMotionServiceName): injectMS,
 	}
 	server, err := newServer(omMap)
 	test.That(t, err, test.ShouldBeNil)
@@ -207,11 +211,11 @@ func TestClientDialerOption(t *testing.T) {
 	ctx := rpc.ContextWithDialer(context.Background(), td)
 	conn1, err := viamgrpc.Dial(ctx, listener.Addr().String(), logger)
 	test.That(t, err, test.ShouldBeNil)
-	client1 := motion.NewClientFromConn(ctx, conn1, "", logger)
+	client1 := motion.NewClientFromConn(ctx, conn1, testMotionServiceName, logger)
 	test.That(t, td.NewConnections, test.ShouldEqual, 3)
 	conn2, err := viamgrpc.Dial(ctx, listener.Addr().String(), logger)
 	test.That(t, err, test.ShouldBeNil)
-	client2 := motion.NewClientFromConn(ctx, conn2, "", logger)
+	client2 := motion.NewClientFromConn(ctx, conn2, testMotionServiceName, logger)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, td.NewConnections, test.ShouldEqual, 3)
 

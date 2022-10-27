@@ -5,41 +5,33 @@ import (
 	"context"
 
 	"github.com/edaniels/golog"
+	commonpb "go.viam.com/api/common/v1"
+	pb "go.viam.com/api/service/motion/v1"
 	"go.viam.com/utils/rpc"
 
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	pb "go.viam.com/rdk/proto/api/service/motion/v1"
 	"go.viam.com/rdk/protoutils"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 )
 
-// client is a client satisfies the motion.proto contract.
+// client implements MotionServiceClient.
 type client struct {
+	name   string
 	conn   rpc.ClientConn
 	client pb.MotionServiceClient
 	logger golog.Logger
 }
 
-// newSvcClientFromConn constructs a new serviceClient using the passed in connection.
-func newSvcClientFromConn(conn rpc.ClientConn, logger golog.Logger) *client {
+// NewClientFromConn constructs a new Client from connection passed in.
+func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Service {
 	grpcClient := pb.NewMotionServiceClient(conn)
-	sc := &client{
+	c := &client{
+		name:   name,
 		conn:   conn,
 		client: grpcClient,
 		logger: logger,
 	}
-	return sc
-}
-
-// Close cleanly closes the underlying connections.
-func (c *client) Close() error {
-	return nil
-}
-
-// NewClientFromConn constructs a new Client from connection passed in.
-func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Service {
-	return newSvcClientFromConn(conn, logger)
+	return c
 }
 
 func (c *client) Move(
@@ -47,11 +39,42 @@ func (c *client) Move(
 	componentName resource.Name,
 	destination *referenceframe.PoseInFrame,
 	worldState *commonpb.WorldState,
+	extra map[string]interface{},
 ) (bool, error) {
+	ext, err := protoutils.StructToStructPb(extra)
+	if err != nil {
+		return false, err
+	}
 	resp, err := c.client.Move(ctx, &pb.MoveRequest{
+		Name:          c.name,
 		ComponentName: protoutils.ResourceNameToProto(componentName),
 		Destination:   referenceframe.PoseInFrameToProtobuf(destination),
 		WorldState:    worldState,
+		Extra:         ext,
+	})
+	if err != nil {
+		return false, err
+	}
+	return resp.Success, nil
+}
+
+func (c *client) MoveSingleComponent(
+	ctx context.Context,
+	componentName resource.Name,
+	destination *referenceframe.PoseInFrame,
+	worldState *commonpb.WorldState,
+	extra map[string]interface{},
+) (bool, error) {
+	ext, err := protoutils.StructToStructPb(extra)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.client.MoveSingleComponent(ctx, &pb.MoveSingleComponentRequest{
+		Name:          c.name,
+		ComponentName: protoutils.ResourceNameToProto(componentName),
+		Destination:   referenceframe.PoseInFrameToProtobuf(destination),
+		WorldState:    worldState,
+		Extra:         ext,
 	})
 	if err != nil {
 		return false, err
@@ -64,11 +87,18 @@ func (c *client) GetPose(
 	componentName resource.Name,
 	destinationFrame string,
 	supplementalTransforms []*commonpb.Transform,
+	extra map[string]interface{},
 ) (*referenceframe.PoseInFrame, error) {
+	ext, err := protoutils.StructToStructPb(extra)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := c.client.GetPose(ctx, &pb.GetPoseRequest{
+		Name:                   c.name,
 		ComponentName:          protoutils.ResourceNameToProto(componentName),
 		DestinationFrame:       destinationFrame,
 		SupplementalTransforms: supplementalTransforms,
+		Extra:                  ext,
 	})
 	if err != nil {
 		return nil, err

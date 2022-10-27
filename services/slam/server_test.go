@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
+	pb "go.viam.com/api/service/slam/v1"
 	"go.viam.com/test"
 
 	"go.viam.com/rdk/pointcloud"
-	pb "go.viam.com/rdk/proto/api/service/slam/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/services/slam"
@@ -23,29 +23,30 @@ import (
 	"go.viam.com/rdk/vision"
 )
 
+const (
+	testSlamServiceName  = "slam1"
+	testSlamServiceName2 = "slam2"
+)
+
 func TestServer(t *testing.T) {
 	injectSvc := &inject.SLAMService{}
 	resourceMap := map[resource.Name]interface{}{
-		slam.Name: injectSvc,
+		slam.Named(testSlamServiceName): injectSvc,
 	}
 	injectSubtypeSvc, err := subtype.New(resourceMap)
 	test.That(t, err, test.ShouldBeNil)
 	slamServer := slam.NewServer(injectSubtypeSvc)
 
 	t.Run("working get position functions", func(t *testing.T) {
-		pose := spatial.NewPoseFromOrientationVector(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+		pose := spatial.NewPoseFromOrientation(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
 		pSucc := referenceframe.NewPoseInFrame("frame", pose)
 
-		injectSvc.CloseFunc = func() error {
-			return nil
-		}
-
-		injectSvc.GetPositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
+		injectSvc.PositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
 			return pSucc, nil
 		}
 
 		reqPos := &pb.GetPositionRequest{
-			Name: "viam",
+			Name: testSlamServiceName,
 		}
 		respPos, err := slamServer.GetPosition(context.Background(), reqPos)
 		test.That(t, err, test.ShouldBeNil)
@@ -53,7 +54,7 @@ func TestServer(t *testing.T) {
 	})
 
 	t.Run("working get map function", func(t *testing.T) {
-		pose := spatial.NewPoseFromOrientationVector(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+		pose := spatial.NewPoseFromOrientation(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
 		pSucc := referenceframe.NewPoseInFrame("frame", pose)
 		pcSucc := &vision.Object{}
 		pcSucc.PointCloud = pointcloud.New()
@@ -61,18 +62,14 @@ func TestServer(t *testing.T) {
 		test.That(t, err, test.ShouldBeNil)
 		imSucc := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 
-		injectSvc.CloseFunc = func() error {
-			return nil
-		}
-
-		injectSvc.GetMapFunc = func(ctx context.Context, name string, mimeType string, cp *referenceframe.PoseInFrame,
+		injectSvc.GetMapFunc = func(ctx context.Context, name, mimeType string, cp *referenceframe.PoseInFrame,
 			include bool,
 		) (string, image.Image, *vision.Object, error) {
 			return mimeType, imSucc, pcSucc, nil
 		}
 
 		reqMap := &pb.GetMapRequest{
-			Name:               "viam",
+			Name:               testSlamServiceName,
 			MimeType:           utils.MimeTypePCD,
 			CameraPosition:     referenceframe.PoseInFrameToProtobuf(pSucc).Pose,
 			IncludeRobotMarker: true,
@@ -82,7 +79,7 @@ func TestServer(t *testing.T) {
 		test.That(t, respMap.MimeType, test.ShouldEqual, utils.MimeTypePCD)
 
 		reqMap = &pb.GetMapRequest{
-			Name:               "viam",
+			Name:               testSlamServiceName,
 			MimeType:           utils.MimeTypeJPEG,
 			CameraPosition:     referenceframe.PoseInFrameToProtobuf(pSucc).Pose,
 			IncludeRobotMarker: true,
@@ -93,16 +90,12 @@ func TestServer(t *testing.T) {
 	})
 
 	t.Run("failing get position function", func(t *testing.T) {
-		injectSvc.CloseFunc = func() error {
-			return errors.New("failure to close")
-		}
-
-		injectSvc.GetPositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
+		injectSvc.PositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
 			return nil, errors.New("failure to get position")
 		}
 
 		req := &pb.GetPositionRequest{
-			Name: "viam",
+			Name: testSlamServiceName,
 		}
 		resp, err := slamServer.GetPosition(context.Background(), req)
 		test.That(t, err, test.ShouldNotBeNil)
@@ -110,13 +103,9 @@ func TestServer(t *testing.T) {
 	})
 
 	t.Run("failing get map function", func(t *testing.T) {
-		pose := spatial.NewPoseFromOrientationVector(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+		pose := spatial.NewPoseFromOrientation(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
 
-		injectSvc.CloseFunc = func() error {
-			return errors.New("failure to close")
-		}
-
-		injectSvc.GetMapFunc = func(ctx context.Context, name string, mimeType string, cp *referenceframe.PoseInFrame,
+		injectSvc.GetMapFunc = func(ctx context.Context, name, mimeType string, cp *referenceframe.PoseInFrame,
 			include bool,
 		) (string, image.Image, *vision.Object, error) {
 			return mimeType, nil, nil, errors.New("failure to get map")
@@ -129,20 +118,20 @@ func TestServer(t *testing.T) {
 	})
 
 	resourceMap = map[resource.Name]interface{}{
-		slam.Name: "not a frame system",
+		slam.Named(testSlamServiceName): "not a frame system",
 	}
 	injectSubtypeSvc, _ = subtype.New(resourceMap)
 	slamServer = slam.NewServer(injectSubtypeSvc)
 
 	t.Run("failing on improper service interface", func(t *testing.T) {
-		improperImplErr := utils.NewUnimplementedInterfaceError("slam.Service", "string")
+		improperImplErr := slam.NewUnimplementedInterfaceError("string")
 
-		getPositionReq := &pb.GetPositionRequest{}
+		getPositionReq := &pb.GetPositionRequest{Name: testSlamServiceName}
 		getModeResp, err := slamServer.GetPosition(context.Background(), getPositionReq)
 		test.That(t, getModeResp, test.ShouldBeNil)
 		test.That(t, err, test.ShouldBeError, improperImplErr)
 
-		getMapReq := &pb.GetMapRequest{}
+		getMapReq := &pb.GetMapRequest{Name: testSlamServiceName}
 		setModeResp, err := slamServer.GetMap(context.Background(), getMapReq)
 		test.That(t, err, test.ShouldBeError, improperImplErr)
 		test.That(t, setModeResp, test.ShouldBeNil)
@@ -151,9 +140,38 @@ func TestServer(t *testing.T) {
 	injectSubtypeSvc, _ = subtype.New(map[resource.Name]interface{}{})
 	slamServer = slam.NewServer(injectSubtypeSvc)
 	t.Run("failing on nonexistent server", func(t *testing.T) {
-		req := &pb.GetPositionRequest{}
+		req := &pb.GetPositionRequest{
+			Name: testSlamServiceName,
+		}
 		resp, err := slamServer.GetPosition(context.Background(), req)
 		test.That(t, resp, test.ShouldBeNil)
-		test.That(t, err, test.ShouldBeError, utils.NewResourceNotFoundError(slam.Name))
+		test.That(t, err, test.ShouldBeError, utils.NewResourceNotFoundError(slam.Named(testSlamServiceName)))
+	})
+	t.Run("Multiple services Valid", func(t *testing.T) {
+		resourceMap = map[resource.Name]interface{}{
+			slam.Named(testSlamServiceName):  injectSvc,
+			slam.Named(testSlamServiceName2): injectSvc,
+		}
+		injectSubtypeSvc, err := subtype.New(resourceMap)
+		test.That(t, err, test.ShouldBeNil)
+		slamServer = slam.NewServer(injectSubtypeSvc)
+		pose := spatial.NewPoseFromOrientation(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+		pSucc := referenceframe.NewPoseInFrame("frame", pose)
+		injectSvc.PositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
+			return pSucc, nil
+		}
+
+		reqPos := &pb.GetPositionRequest{
+			Name: testSlamServiceName,
+		}
+		respPos, err := slamServer.GetPosition(context.Background(), reqPos)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, referenceframe.ProtobufToPoseInFrame(respPos.Pose).FrameName(), test.ShouldEqual, pSucc.FrameName())
+		reqPos = &pb.GetPositionRequest{
+			Name: testSlamServiceName2,
+		}
+		respPos, err = slamServer.GetPosition(context.Background(), reqPos)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, referenceframe.ProtobufToPoseInFrame(respPos.Pose).FrameName(), test.ShouldEqual, pSucc.FrameName())
 	})
 }

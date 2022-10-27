@@ -3,10 +3,10 @@ package inject
 import (
 	"context"
 
+	commonpb "go.viam.com/api/common/v1"
 	"go.viam.com/utils"
 
-	"go.viam.com/rdk/component/gantry"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
+	"go.viam.com/rdk/components/gantry"
 	"go.viam.com/rdk/referenceframe"
 )
 
@@ -14,53 +14,58 @@ import (
 type Gantry struct {
 	gantry.LocalGantry
 	DoFunc             func(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error)
-	GetPositionFunc    func(ctx context.Context) ([]float64, error)
-	MoveToPositionFunc func(ctx context.Context, positions []float64, worldState *commonpb.WorldState) error
-	GetLengthsFunc     func(ctx context.Context) ([]float64, error)
-	StopFunc           func(ctx context.Context) error
-	IsMovingFunc       func() bool
+	PositionFunc       func(ctx context.Context, extra map[string]interface{}) ([]float64, error)
+	MoveToPositionFunc func(ctx context.Context, positions []float64, worldState *commonpb.WorldState, extra map[string]interface{}) error
+	LengthsFunc        func(ctx context.Context, extra map[string]interface{}) ([]float64, error)
+	StopFunc           func(ctx context.Context, extra map[string]interface{}) error
+	IsMovingFunc       func(context.Context) (bool, error)
 	CloseFunc          func(ctx context.Context) error
 	ModelFrameFunc     func() referenceframe.Model
 }
 
-// GetPosition calls the injected GetPosition or the real version.
-func (g *Gantry) GetPosition(ctx context.Context) ([]float64, error) {
-	if g.GetPositionFunc == nil {
-		return g.LocalGantry.GetPosition(ctx)
+// Position calls the injected Position or the real version.
+func (g *Gantry) Position(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+	if g.PositionFunc == nil {
+		return g.LocalGantry.Position(ctx, extra)
 	}
-	return g.GetPositionFunc(ctx)
+	return g.PositionFunc(ctx, extra)
 }
 
 // MoveToPosition calls the injected MoveToPosition or the real version.
-func (g *Gantry) MoveToPosition(ctx context.Context, positions []float64, worldState *commonpb.WorldState) error {
+func (g *Gantry) MoveToPosition(
+	ctx context.Context,
+	positions []float64,
+	worldState *commonpb.WorldState,
+	extra map[string]interface{},
+) error {
 	if g.MoveToPositionFunc == nil {
-		return g.LocalGantry.MoveToPosition(ctx, positions, worldState)
+		return g.LocalGantry.MoveToPosition(ctx, positions, worldState, extra)
 	}
-	return g.MoveToPositionFunc(ctx, positions, worldState)
+	return g.MoveToPositionFunc(ctx, positions, worldState, extra)
 }
 
-// GetLengths calls the injected GetLengths or the real version.
-func (g *Gantry) GetLengths(ctx context.Context) ([]float64, error) {
-	if g.GetLengthsFunc == nil {
-		return g.LocalGantry.GetLengths(ctx)
+// Lengths calls the injected Lengths or the real version.
+func (g *Gantry) Lengths(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+	if g.LengthsFunc == nil {
+		return g.LocalGantry.Lengths(ctx, extra)
 	}
-	return g.GetLengthsFunc(ctx)
+	return g.LengthsFunc(ctx, extra)
 }
 
 // Stop calls the injected Stop or the real version.
-func (g *Gantry) Stop(ctx context.Context) error {
+func (g *Gantry) Stop(ctx context.Context, extra map[string]interface{}) error {
 	if g.StopFunc == nil {
-		return g.LocalGantry.Stop(ctx)
+		return g.LocalGantry.Stop(ctx, extra)
 	}
-	return g.StopFunc(ctx)
+	return g.StopFunc(ctx, extra)
 }
 
 // IsMoving calls the injected IsMoving or the real version.
-func (g *Gantry) IsMoving() bool {
+func (g *Gantry) IsMoving(ctx context.Context) (bool, error) {
 	if g.IsMovingFunc == nil {
-		return g.LocalGantry.IsMoving()
+		return g.LocalGantry.IsMoving(ctx)
 	}
-	return g.IsMovingFunc()
+	return g.IsMovingFunc(ctx)
 }
 
 // ModelFrame returns a Gantry ModelFrame.
@@ -79,10 +84,10 @@ func (g *Gantry) Close(ctx context.Context) error {
 	return g.CloseFunc(ctx)
 }
 
-// Do calls the injected Do or the real version.
-func (g *Gantry) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+// DoCommand calls the injected DoCommand or the real version.
+func (g *Gantry) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	if g.DoFunc == nil {
-		return g.LocalGantry.Do(ctx, cmd)
+		return g.LocalGantry.DoCommand(ctx, cmd)
 	}
 	return g.DoFunc(ctx, cmd)
 }

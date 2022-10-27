@@ -4,10 +4,9 @@ package sensors
 import (
 	"context"
 
-	"google.golang.org/protobuf/types/known/structpb"
+	commonpb "go.viam.com/api/common/v1"
+	pb "go.viam.com/api/service/sensors/v1"
 
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	pb "go.viam.com/rdk/proto/api/service/sensors/v1"
 	"go.viam.com/rdk/protoutils"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/subtype"
@@ -25,14 +24,14 @@ func NewServer(s subtype.Service) pb.SensorsServiceServer {
 	return &subtypeServer{subtypeSvc: s}
 }
 
-func (server *subtypeServer) service() (Service, error) {
-	resource := server.subtypeSvc.Resource(Name.String())
+func (server *subtypeServer) service(serviceName string) (Service, error) {
+	resource := server.subtypeSvc.Resource(serviceName)
 	if resource == nil {
-		return nil, utils.NewResourceNotFoundError(Name)
+		return nil, utils.NewResourceNotFoundError(Named(serviceName))
 	}
 	svc, ok := resource.(Service)
 	if !ok {
-		return nil, utils.NewUnimplementedInterfaceError("sensors.Service", resource)
+		return nil, NewUnimplementedInterfaceError(resource)
 	}
 	return svc, nil
 }
@@ -41,11 +40,11 @@ func (server *subtypeServer) GetSensors(
 	ctx context.Context,
 	req *pb.GetSensorsRequest,
 ) (*pb.GetSensorsResponse, error) {
-	svc, err := server.service()
+	svc, err := server.service(req.Name)
 	if err != nil {
 		return nil, err
 	}
-	names, err := svc.GetSensors(ctx)
+	names, err := svc.Sensors(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +60,7 @@ func (server *subtypeServer) GetReadings(
 	ctx context.Context,
 	req *pb.GetReadingsRequest,
 ) (*pb.GetReadingsResponse, error) {
-	svc, err := server.service()
+	svc, err := server.service(req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -70,20 +69,16 @@ func (server *subtypeServer) GetReadings(
 		sensorNames = append(sensorNames, protoutils.ResourceNameFromProto(name))
 	}
 
-	readings, err := svc.GetReadings(ctx, sensorNames)
+	readings, err := svc.Readings(ctx, sensorNames)
 	if err != nil {
 		return nil, err
 	}
 
 	readingsP := make([]*pb.Readings, 0, len(readings))
 	for _, reading := range readings {
-		rReading := make([]*structpb.Value, 0, len(reading.Readings))
-		for _, r := range reading.Readings {
-			v, err := structpb.NewValue(r)
-			if err != nil {
-				return nil, err
-			}
-			rReading = append(rReading, v)
+		rReading, err := protoutils.ReadingGoToProto(reading.Readings)
+		if err != nil {
+			return nil, err
 		}
 		readingP := &pb.Readings{
 			Name:     protoutils.ResourceNameToProto(reading.Name),

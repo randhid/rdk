@@ -4,14 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"net"
 	"testing"
 
 	"github.com/edaniels/golog"
+	"github.com/edaniels/gostream/codec/x264"
 	streampb "github.com/edaniels/gostream/proto/stream/v1"
 	"github.com/jhump/protoreflect/grpcreflect"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	commonpb "go.viam.com/api/common/v1"
 	"go.viam.com/test"
 	"go.viam.com/utils"
 	"go.viam.com/utils/rpc"
@@ -20,17 +21,17 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"go.viam.com/rdk/component/arm"
-	"go.viam.com/rdk/component/camera"
+	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/config"
+	mycomppb "go.viam.com/rdk/examples/mycomponent/proto/api/component/mycomponent/v1"
 	rgrpc "go.viam.com/rdk/grpc"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
 	"go.viam.com/rdk/robot/web"
 	weboptions "go.viam.com/rdk/robot/web/options"
-	mycomppb "go.viam.com/rdk/samples/mycomponent/proto/api/component/mycomponent/v1"
 	"go.viam.com/rdk/testutils/inject"
+	"go.viam.com/rdk/testutils/robottestutils"
 	rutils "go.viam.com/rdk/utils"
 )
 
@@ -53,7 +54,7 @@ func TestWebStart(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	arm1 := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err := arm1.GetEndPosition(ctx)
+	arm1Position, err := arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 
@@ -72,11 +73,13 @@ func TestWebStartOptions(t *testing.T) {
 
 	svc := web.New(ctx, injectRobot, logger)
 
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	addr := fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
+	options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
+
+	options.Network.BindAddress = "woop"
+	err := svc.Start(ctx, options)
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, "only set one of")
+	options.Network.BindAddress = ""
 
 	err = svc.Start(ctx, options)
 	test.That(t, err, test.ShouldBeNil)
@@ -85,13 +88,13 @@ func TestWebStartOptions(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	arm1 := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err := arm1.GetEndPosition(ctx)
+	arm1Position, err := arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 
+	test.That(t, conn.Close(), test.ShouldBeNil)
 	err = utils.TryClose(context.Background(), svc)
 	test.That(t, err, test.ShouldBeNil)
-	test.That(t, conn.Close(), test.ShouldBeNil)
 }
 
 func TestWebWithAuth(t *testing.T) {
@@ -111,11 +114,7 @@ func TestWebWithAuth(t *testing.T) {
 		t.Run(tc.Case, func(t *testing.T) {
 			svc := web.New(ctx, injectRobot, logger)
 
-			port, err := utils.TryReserveRandomPort()
-			test.That(t, err, test.ShouldBeNil)
-			options := weboptions.New()
-			addr := fmt.Sprintf("localhost:%d", port)
-			options.Network.BindAddress = addr
+			options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
 			options.Managed = tc.Managed
 			options.FQDN = tc.EntityName
 			options.LocalFQDN = primitive.NewObjectID().Hex()
@@ -140,7 +139,7 @@ func TestWebWithAuth(t *testing.T) {
 				options.BakedAuthCreds = rpc.Credentials{Type: "blah"}
 			}
 
-			err = svc.Start(ctx, options)
+			err := svc.Start(ctx, options)
 			test.That(t, err, test.ShouldBeNil)
 
 			_, err = rgrpc.Dial(context.Background(), addr, logger)
@@ -180,7 +179,7 @@ func TestWebWithAuth(t *testing.T) {
 				test.That(t, err, test.ShouldBeNil)
 				arm1 := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-				arm1Position, err := arm1.GetEndPosition(ctx)
+				arm1Position, err := arm1.EndPosition(ctx, nil)
 				test.That(t, err, test.ShouldBeNil)
 				test.That(t, arm1Position, test.ShouldResemble, pos)
 
@@ -197,7 +196,7 @@ func TestWebWithAuth(t *testing.T) {
 				test.That(t, err, test.ShouldBeNil)
 				arm1 = arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-				arm1Position, err = arm1.GetEndPosition(ctx)
+				arm1Position, err = arm1.EndPosition(ctx, nil)
 				test.That(t, err, test.ShouldBeNil)
 				test.That(t, arm1Position, test.ShouldResemble, pos)
 
@@ -215,7 +214,7 @@ func TestWebWithAuth(t *testing.T) {
 
 				arm1 := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-				arm1Position, err := arm1.GetEndPosition(ctx)
+				arm1Position, err := arm1.EndPosition(ctx, nil)
 				test.That(t, err, test.ShouldBeNil)
 				test.That(t, arm1Position, test.ShouldResemble, pos)
 
@@ -233,7 +232,7 @@ func TestWebWithAuth(t *testing.T) {
 
 				arm1 = arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-				arm1Position, err = arm1.GetEndPosition(ctx)
+				arm1Position, err = arm1.EndPosition(ctx, nil)
 				test.That(t, err, test.ShouldBeNil)
 				test.That(t, arm1Position, test.ShouldResemble, pos)
 
@@ -260,11 +259,7 @@ func TestWebWithTLSAuth(t *testing.T) {
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	test.That(t, err, test.ShouldBeNil)
 
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	addr := fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
+	options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
 	options.Network.TLSConfig = &tls.Config{
 		RootCAs:      certPool,
 		ClientCAs:    certPool,
@@ -323,7 +318,7 @@ func TestWebWithTLSAuth(t *testing.T) {
 
 	arm1 := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err := arm1.GetEndPosition(ctx)
+	arm1Position, err := arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 	test.That(t, conn.Close(), test.ShouldBeNil)
@@ -337,7 +332,7 @@ func TestWebWithTLSAuth(t *testing.T) {
 
 	arm1 = arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err = arm1.GetEndPosition(ctx)
+	arm1Position, err = arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 	test.That(t, conn.Close(), test.ShouldBeNil)
@@ -351,7 +346,7 @@ func TestWebWithTLSAuth(t *testing.T) {
 
 	arm1 = arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err = arm1.GetEndPosition(ctx)
+	arm1Position, err = arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 	test.That(t, conn.Close(), test.ShouldBeNil)
@@ -372,7 +367,7 @@ func TestWebWithTLSAuth(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 
 	arm1 = arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
-	arm1Position, err = arm1.GetEndPosition(ctx)
+	arm1Position, err = arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 	test.That(t, conn.Close(), test.ShouldBeNil)
@@ -397,7 +392,7 @@ func TestWebWithTLSAuth(t *testing.T) {
 
 	arm1 = arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err = arm1.GetEndPosition(ctx)
+	arm1Position, err = arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 
@@ -412,18 +407,14 @@ func TestWebWithBadAuthHandlers(t *testing.T) {
 
 	svc := web.New(ctx, injectRobot, logger)
 
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	addr := fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
+	options, _, _ := robottestutils.CreateBaseOptionsAndListener(t)
 	options.Auth.Handlers = []config.AuthHandlerConfig{
 		{
 			Type: "unknown",
 		},
 	}
 
-	err = svc.Start(ctx, options)
+	err := svc.Start(ctx, options)
 	test.That(t, err, test.ShouldNotBeNil)
 	test.That(t, err.Error(), test.ShouldContainSubstring, "do not know how")
 	test.That(t, err.Error(), test.ShouldContainSubstring, "unknown")
@@ -431,11 +422,7 @@ func TestWebWithBadAuthHandlers(t *testing.T) {
 
 	svc = web.New(ctx, injectRobot, logger)
 
-	port, err = utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options = weboptions.New()
-	addr = fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
+	options, _, _ = robottestutils.CreateBaseOptionsAndListener(t)
 	options.Auth.Handlers = []config.AuthHandlerConfig{
 		{
 			Type: rpc.CredentialsTypeAPIKey,
@@ -455,12 +442,8 @@ func TestWebUpdate(t *testing.T) {
 
 	svc := web.New(ctx, robot, logger)
 
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	addr := fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
-	err = svc.Start(ctx, options)
+	options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
+	err := svc.Start(ctx, options)
 	test.That(t, err, test.ShouldBeNil)
 
 	conn, err := rgrpc.Dial(context.Background(), addr, logger)
@@ -468,7 +451,7 @@ func TestWebUpdate(t *testing.T) {
 
 	arm1 := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err := arm1.GetEndPosition(ctx)
+	arm1Position, err := arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, pos)
 	test.That(t, conn.Close(), test.ShouldBeNil)
@@ -476,7 +459,7 @@ func TestWebUpdate(t *testing.T) {
 	// add arm to robot and then update
 	injectArm := &inject.Arm{}
 	newPos := &commonpb.Pose{X: 1, Y: 3, Z: 6}
-	injectArm.GetEndPositionFunc = func(ctx context.Context) (*commonpb.Pose, error) {
+	injectArm.EndPositionFunc = func(ctx context.Context, extra map[string]interface{}) (*commonpb.Pose, error) {
 		return newPos, nil
 	}
 	rs := map[resource.Name]interface{}{arm.Named(arm1String): injectArm}
@@ -488,7 +471,7 @@ func TestWebUpdate(t *testing.T) {
 	conn, err = rgrpc.Dial(context.Background(), addr, logger)
 	test.That(t, err, test.ShouldBeNil)
 	aClient := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
-	position, err := aClient.GetEndPosition(context.Background())
+	position, err := aClient.EndPosition(context.Background(), nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, position, test.ShouldResemble, newPos)
 
@@ -505,6 +488,10 @@ func TestWebUpdate(t *testing.T) {
 
 	svc2 := web.New(ctx, robot2, logger)
 
+	listener := testutils.ReserveRandomListener(t)
+	addr = listener.Addr().String()
+	options.Network.Listener = listener
+
 	err = svc2.Start(ctx, options)
 	test.That(t, err, test.ShouldBeNil)
 
@@ -513,7 +500,7 @@ func TestWebUpdate(t *testing.T) {
 
 	arm1 = arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 
-	arm1Position, err = arm1.GetEndPosition(ctx)
+	arm1Position, err = arm1.EndPosition(ctx, nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, arm1Position, test.ShouldResemble, newPos)
 
@@ -521,7 +508,7 @@ func TestWebUpdate(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	aClient2 := arm.NewClientFromConn(context.Background(), conn, arm1String, logger)
 	test.That(t, err, test.ShouldBeNil)
-	position, err = aClient2.GetEndPosition(context.Background())
+	position, err = aClient2.EndPosition(context.Background(), nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, position, test.ShouldResemble, newPos)
 
@@ -529,7 +516,7 @@ func TestWebUpdate(t *testing.T) {
 	arm2 := "arm2"
 	injectArm2 := &inject.Arm{}
 	pos2 := &commonpb.Pose{X: 2, Y: 3, Z: 4}
-	injectArm2.GetEndPositionFunc = func(ctx context.Context) (*commonpb.Pose, error) {
+	injectArm2.EndPositionFunc = func(ctx context.Context, extra map[string]interface{}) (*commonpb.Pose, error) {
 		return pos2, nil
 	}
 	rs[arm.Named(arm2)] = injectArm2
@@ -538,13 +525,13 @@ func TestWebUpdate(t *testing.T) {
 	err = updateable.Update(context.Background(), rs)
 	test.That(t, err, test.ShouldBeNil)
 
-	position, err = aClient2.GetEndPosition(context.Background())
+	position, err = aClient2.EndPosition(context.Background(), nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, position, test.ShouldResemble, newPos)
 
 	aClient3 := arm.NewClientFromConn(context.Background(), conn, arm2, logger)
 	test.That(t, err, test.ShouldBeNil)
-	position, err = aClient3.GetEndPosition(context.Background())
+	position, err = aClient3.EndPosition(context.Background(), nil)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, position, test.ShouldResemble, pos2)
 
@@ -569,14 +556,9 @@ func TestWebWithStreams(t *testing.T) {
 
 	// Start service
 	logger := golog.NewTestLogger(t)
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	addr := fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
-	svc := web.New(ctx, robot, logger)
-	test.That(t, err, test.ShouldBeNil)
-	err = svc.Start(ctx, options)
+	options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
+	svc := web.New(ctx, robot, logger, web.WithStreamConfig(x264.DefaultStreamConfig))
+	err := svc.Start(ctx, options)
 	test.That(t, err, test.ShouldBeNil)
 
 	// Start a stream service client
@@ -627,14 +609,9 @@ func TestWebAddFirstStream(t *testing.T) {
 
 	// Start service
 	logger := golog.NewTestLogger(t)
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	addr := fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
-	svc := web.New(ctx, robot, logger)
-	test.That(t, err, test.ShouldBeNil)
-	err = svc.Start(ctx, options)
+	options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
+	svc := web.New(ctx, robot, logger, web.WithStreamConfig(x264.DefaultStreamConfig))
+	err := svc.Start(ctx, options)
 	test.That(t, err, test.ShouldBeNil)
 
 	// Start a stream service client
@@ -671,7 +648,7 @@ func TestWebAddFirstStream(t *testing.T) {
 
 func setupRobotCtx() (context.Context, robot.Robot) {
 	injectArm := &inject.Arm{}
-	injectArm.GetEndPositionFunc = func(ctx context.Context) (*commonpb.Pose, error) {
+	injectArm.EndPositionFunc = func(ctx context.Context, extra map[string]interface{}) (*commonpb.Pose, error) {
 		return pos, nil
 	}
 	injectRobot := &inject.Robot{}
@@ -691,12 +668,8 @@ func TestForeignResource(t *testing.T) {
 
 	svc := web.New(ctx, robot, logger)
 
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	addr := fmt.Sprintf("localhost:%d", port)
-	options.Network.BindAddress = addr
-	err = svc.Start(ctx, options)
+	options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
+	err := svc.Start(ctx, options)
 	test.That(t, err, test.ShouldBeNil)
 
 	conn, err := rgrpc.Dial(context.Background(), addr, logger)
@@ -715,12 +688,12 @@ func TestForeignResource(t *testing.T) {
 	remoteServer := grpc.NewServer()
 	mycomppb.RegisterMyComponentServiceServer(remoteServer, &myCompServer{})
 
-	listener, err := net.Listen("tcp", "localhost:0")
+	listenerR, err := net.Listen("tcp", "localhost:0")
 	test.That(t, err, test.ShouldBeNil)
-	go remoteServer.Serve(listener)
+	go remoteServer.Serve(listenerR)
 	defer remoteServer.Stop()
 
-	remoteConn, err := rgrpc.Dial(context.Background(), listener.Addr().String(), logger)
+	remoteConn, err := rgrpc.Dial(context.Background(), listenerR.Addr().String(), logger)
 	test.That(t, err, test.ShouldBeNil)
 
 	resourceSubtype := resource.NewSubtype(
@@ -746,6 +719,9 @@ func TestForeignResource(t *testing.T) {
 		return foreignRes, nil
 	}
 
+	listener := testutils.ReserveRandomListener(t)
+	addr = listener.Addr().String()
+	options.Network.Listener = listener
 	svc = web.New(ctx, injectRobot, logger)
 	err = svc.Start(ctx, options)
 	test.That(t, err, test.ShouldBeNil)

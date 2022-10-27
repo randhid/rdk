@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/edaniels/golog"
 	"github.com/pkg/errors"
 	"go.viam.com/utils"
 
@@ -25,10 +26,14 @@ const (
 	Rebuild
 )
 
-// CompononentUpdate interface that a component can optionally implement.
+// ComponentUpdate interface that a component can optionally implement.
 // This interface helps the reconfiguration process.
-type CompononentUpdate interface {
+type ComponentUpdate interface {
 	UpdateAction(config *Component) UpdateActionType
+}
+
+type dependencyValidator interface {
+	Validate(path string) ([]string, error)
 }
 
 type validator interface {
@@ -44,8 +49,8 @@ type ResourceConfig interface {
 	Set(val string) error
 }
 
-// A ComponentLevelServiceConfig describes component-level configuration for a service.
-type ComponentLevelServiceConfig struct {
+// A ResourceLevelServiceConfig describes component or remote configuration for a service.
+type ResourceLevelServiceConfig struct {
 	Type                resource.SubtypeName `json:"type"`
 	Attributes          AttributeMap         `json:"attributes"`
 	ConvertedAttributes interface{}          `json:"-"`
@@ -55,16 +60,35 @@ type ComponentLevelServiceConfig struct {
 type Component struct {
 	Name string `json:"name"`
 
-	Namespace     resource.Namespace            `json:"namespace"`
-	Type          resource.SubtypeName          `json:"type"`
-	SubType       string                        `json:"subtype"`
-	Model         string                        `json:"model"`
-	Frame         *Frame                        `json:"frame,omitempty"`
-	DependsOn     []string                      `json:"depends_on"`
-	ServiceConfig []ComponentLevelServiceConfig `json:"service_config"`
+	Namespace     resource.Namespace           `json:"namespace"`
+	Type          resource.SubtypeName         `json:"type"`
+	Model         string                       `json:"model"`
+	Frame         *Frame                       `json:"frame,omitempty"`
+	DependsOn     []string                     `json:"depends_on"`
+	ServiceConfig []ResourceLevelServiceConfig `json:"service_config"`
 
 	Attributes          AttributeMap `json:"attributes"`
 	ConvertedAttributes interface{}  `json:"-"`
+	ImplicitDependsOn   []string     `json:"-"`
+}
+
+// Dependencies returns the deduplicated union of user-defined and implicit dependencies.
+func (config *Component) Dependencies() []string {
+	result := make([]string, 0, len(config.DependsOn)+len(config.ImplicitDependsOn))
+	seen := make(map[string]struct{})
+	appendUniq := func(dep string) {
+		if _, ok := seen[dep]; !ok {
+			seen[dep] = struct{}{}
+			result = append(result, dep)
+		}
+	}
+	for _, dep := range config.DependsOn {
+		appendUniq(dep)
+	}
+	for _, dep := range config.ImplicitDependsOn {
+		appendUniq(dep)
+	}
+	return result
 }
 
 // Ensure Component conforms to flag.Value.
@@ -76,36 +100,64 @@ func (config *Component) String() string {
 }
 
 // ResourceName returns the  ResourceName for the component.
+// TODO(npmemard) Before merge should remove this also the service one.
 func (config *Component) ResourceName() resource.Name {
+	remotes := strings.Split(config.Name, ":")
 	cType := string(config.Type)
+	if len(remotes) > 1 {
+		rName := resource.NewName(config.Namespace, resource.ResourceTypeComponent, resource.SubtypeName(cType), remotes[len(remotes)-1])
+		return rName.PrependRemote(resource.RemoteName(strings.Join(remotes[:len(remotes)-1], ":")))
+	}
 	return resource.NewName(config.Namespace, resource.ResourceTypeComponent, resource.SubtypeName(cType), config.Name)
 }
 
-// Validate ensures all parts of the config are valid.
-func (config *Component) Validate(path string) error {
+// Validate ensures all parts of the config are valid and returns dependencies.
+func (config *Component) Validate(path string) ([]string, error) {
+	var deps []string
 	if config.Namespace == "" {
 		// NOTE: This should never be removed in order to ensure RDK is the
 		// default namespace.
 		config.Namespace = resource.ResourceNamespaceRDK
 	}
+	if err := resource.ContainsReservedCharacter(string(config.Namespace)); err != nil {
+		return nil, err
+	}
 	if config.Name == "" {
-		return utils.NewConfigValidationFieldRequiredError(path, "name")
+		return nil, utils.NewConfigValidationFieldRequiredError(path, "name")
+	}
+	if err := resource.ContainsReservedCharacter(config.Name); err != nil {
+		return nil, err
 	}
 	for key, value := range config.Attributes {
-		v, ok := value.(validator)
-		if !ok {
+		fieldPath := fmt.Sprintf("%s.%s", path, key)
+		switch v := value.(type) {
+		case validator:
+			if err := v.Validate(fieldPath); err != nil {
+				return nil, err
+			}
+		case dependencyValidator:
+			validatedDeps, err := v.Validate(fieldPath)
+			if err != nil {
+				return nil, err
+			}
+			deps = append(deps, validatedDeps...)
+		default:
 			continue
 		}
-		if err := v.Validate(fmt.Sprintf("%s.%s", path, key)); err != nil {
-			return err
-		}
 	}
-	if v, ok := config.ConvertedAttributes.(validator); ok {
+	switch v := config.ConvertedAttributes.(type) {
+	case validator:
 		if err := v.Validate(path); err != nil {
-			return err
+			return nil, err
 		}
+	case dependencyValidator:
+		validatedDeps, err := v.Validate(path)
+		if err != nil {
+			return nil, err
+		}
+		deps = append(deps, validatedDeps...)
 	}
-	return nil
+	return deps, nil
 }
 
 // Set hydrates a config based on a flag like value.
@@ -137,8 +189,6 @@ func ParseComponentFlag(flag string) (Component, error) {
 			cmp.Name = keyVal[1]
 		case "type":
 			cmp.Type = resource.SubtypeName(keyVal[1])
-		case "subtype":
-			cmp.SubType = keyVal[1]
 		case "model":
 			cmp.Model = keyVal[1]
 		case "depends_on":
@@ -173,7 +223,8 @@ type ServiceType string
 
 // A Service describes the configuration of a service.
 type Service struct {
-	Name                string             `json:"name"` // NOTE: This property is deprecated for services
+	Name                string             `json:"name"`
+	Model               string             `json:"model"`
 	Namespace           resource.Namespace `json:"namespace"`
 	Type                ServiceType        `json:"type"`
 	Attributes          AttributeMap       `json:"attributes"`
@@ -190,17 +241,20 @@ func (config *Service) String() string {
 
 // ResourceName returns the  ResourceName for the component.
 func (config *Service) ResourceName() resource.Name {
+	remotes := strings.Split(config.Name, ":")
 	cType := string(config.Type)
-	return resource.NewName(
-		config.Namespace,
+	rName := resource.NewName(config.Namespace,
 		resource.ResourceTypeService,
 		resource.SubtypeName(cType),
-		cType,
-	)
+		config.Name)
+	if len(remotes) > 1 {
+		return rName.PrependRemote(resource.RemoteName(strings.Join(remotes[:len(remotes)-1], ":")))
+	}
+	return rName
 }
 
 // ResourceName returns the  ResourceName for the component within a service_config.
-func (config *ComponentLevelServiceConfig) ResourceName() resource.Name {
+func (config *ResourceLevelServiceConfig) ResourceName() resource.Name {
 	cType := string(config.Type)
 	return resource.NewName(
 		resource.ResourceNamespaceRDK,
@@ -261,10 +315,25 @@ func (config *Service) Validate(path string) error {
 	if config.Type == "" {
 		return utils.NewConfigValidationFieldRequiredError(path, "type")
 	}
+	// If services do not have a name use the name builtin
+	if config.Name == "" {
+		golog.Global().Warnw("no name given, defaulting name to builtin")
+		config.Name = resource.DefaultModelName
+	}
+	if config.Model == "" {
+		golog.Global().Warnw("no model given; using default")
+		config.Model = resource.DefaultModelName
+	}
 	if config.Namespace == "" {
 		// NOTE: This should never be removed in order to ensure RDK is the
 		// default namespace.
 		config.Namespace = resource.ResourceNamespaceRDK
+	}
+	if err := resource.ContainsReservedCharacter(string(config.Namespace)); err != nil {
+		return err
+	}
+	if err := resource.ContainsReservedCharacter(config.Name); err != nil {
+		return err
 	}
 	for key, value := range config.Attributes {
 		v, ok := value.(validator)

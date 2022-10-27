@@ -24,7 +24,7 @@ type Result struct {
 }
 
 // Source pulls an image from src and applies the detector pipeline to it, resulting in an image overlaid with detections.
-// Fulfills gostream.ImageSource interface.
+// Fulfills gostream.VideoReader interface.
 type Source struct {
 	pipelineOutput          chan *Result
 	activeBackgroundWorkers sync.WaitGroup
@@ -32,38 +32,42 @@ type Source struct {
 	cancelFunc              func()
 }
 
-// NewSource builds the pipeline from an input ImageSource and Detector.
-func NewSource(src gostream.ImageSource, det Detector) (*Source, error) {
+// NewSource builds the pipeline from an input VideoSource and Detector.
+func NewSource(src gostream.VideoSource, det Detector) (*Source, error) {
 	// fill optional functions with identity operators
 	if src == nil {
 		return nil, errors.New("object detection source must include an image source to pull from")
 	}
+	cancelCtx, cancel := context.WithCancel(context.Background())
 	if det == nil {
-		det = func(img image.Image) ([]Detection, error) { return nil, nil }
+		det = func(ctx context.Context, img image.Image) ([]Detection, error) { return nil, nil }
 	}
 
-	cancelCtx, cancel := context.WithCancel(context.Background())
 	s := &Source{
 		pipelineOutput: make(chan *Result),
 		cancelCtx:      cancelCtx,
 		cancelFunc:     cancel,
 	}
 
-	s.backgroundWorker(src, det)
+	s.backgroundWorker(gostream.NewEmbeddedVideoStream(src), det)
 	return s, nil
 }
 
-func (s *Source) backgroundWorker(src gostream.ImageSource, det Detector) {
+func (s *Source) backgroundWorker(stream gostream.VideoStream, det Detector) {
+	defer func() {
+		utils.UncheckedError(stream.Close(context.Background()))
+	}()
+
 	// define the full pipeline
 	s.activeBackgroundWorkers.Add(1)
 	utils.ManagedGo(func() {
 		for {
-			original, release, err := src.Next(s.cancelCtx)
+			original, release, err := stream.Next(s.cancelCtx)
 			if err != nil && errors.Is(err, context.Canceled) {
 				return
 			}
-			clone := rimage.CloneToImageWithDepth(original) // use depth info if available
-			detections, err := det(clone)
+			clone := rimage.CloneImage(original)
+			detections, err := det(s.cancelCtx, clone)
 
 			r := &Result{
 				OriginalImage: clone,
@@ -87,9 +91,9 @@ func (s *Source) Close() {
 	s.activeBackgroundWorkers.Wait()
 }
 
-// Next returns the original image overlaid with the found detections.
-func (s *Source) Next(ctx context.Context) (image.Image, func(), error) {
-	ctx, span := trace.StartSpan(ctx, "vision::objectdetection::Source::Next")
+// Read returns the original image overlaid with the found detections.
+func (s *Source) Read(ctx context.Context) (image.Image, func(), error) {
+	ctx, span := trace.StartSpan(ctx, "vision::objectdetection::Source::Read")
 	defer span.End()
 	start := time.Now()
 	res, err := s.NextResult(ctx)

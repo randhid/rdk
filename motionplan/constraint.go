@@ -3,8 +3,10 @@ package motionplan
 import (
 	"errors"
 	"math"
+	"strconv"
 
 	"github.com/golang/geo/r3"
+	commonpb "go.viam.com/api/common/v1"
 
 	"go.viam.com/rdk/referenceframe"
 	spatial "go.viam.com/rdk/spatialmath"
@@ -41,7 +43,7 @@ func (c *constraintHandler) CheckConstraintPath(ci *ConstraintInput, resolution 
 	if err != nil {
 		return false, nil
 	}
-	steps := getSteps(ci.StartPos, ci.EndPos, resolution)
+	steps := GetSteps(ci.StartPos, ci.EndPos, resolution)
 
 	var lastGood []referenceframe.Input
 	// Seed with just the start position to walk the path
@@ -89,7 +91,9 @@ func (c *constraintHandler) AddConstraint(name string, cons Constraint) {
 	if c.constraints == nil {
 		c.constraints = map[string]Constraint{}
 	}
-	c.constraints[name] = cons
+	if cons != nil {
+		c.constraints[name] = cons
+	}
 }
 
 // RemoveConstraint will remove the given constraint.
@@ -120,15 +124,18 @@ func (c *constraintHandler) CheckConstraints(cInput *ConstraintInput) (bool, flo
 	return true, score
 }
 
-// NewCollisionConstraint takes a frame and geometries representing obstacles and interaction spaces and will construct a collision
-// avoidance constraint from them.
-func NewCollisionConstraint(frame referenceframe.Frame, obstacles, interactionSpaces map[string]spatial.Geometry) Constraint {
-	// Making the assumption that setting all inputs to zero is a valid configuration without extraneous self-collisions
-	zeroVols, err := frame.Geometries(make([]referenceframe.Input, len(frame.DoF())))
-	if err != nil && len(zeroVols) == 0 {
+// NewCollisionConstraint is a helper function for creating a collision Constraint that takes a frame and geometries
+// representing obstacles and interaction spaces and will construct a collision avoidance constraint from them.
+func NewCollisionConstraint(
+	frame referenceframe.Frame,
+	goodInput []referenceframe.Input,
+	obstacles, interactionSpaces map[string]spatial.Geometry,
+) Constraint {
+	zeroVols, err := frame.Geometries(goodInput)
+	if err != nil && len(zeroVols.Geometries()) == 0 {
 		return nil // no geometries defined for frame
 	}
-	internalEntities, err := NewObjectCollisionEntities(zeroVols)
+	internalEntities, err := NewObjectCollisionEntities(zeroVols.Geometries())
 	if err != nil {
 		return nil
 	}
@@ -150,7 +157,7 @@ func NewCollisionConstraint(frame referenceframe.Frame, obstacles, interactionSp
 		if err != nil && internal == nil {
 			return false, 0
 		}
-		internalEntities, err := NewObjectCollisionEntities(internal)
+		internalEntities, err := NewObjectCollisionEntities(internal.Geometries())
 		if err != nil {
 			return false, 0
 		}
@@ -171,30 +178,82 @@ func NewCollisionConstraint(frame referenceframe.Frame, obstacles, interactionSp
 	return constraint
 }
 
-// NewInterpolatingConstraint creates a constraint function from an arbitrary function that will decide if a given pose is valid.
-// This function will check the given function at each point in checkSeq, and 1-point. If all constraints are satisfied,
-// it will return true. If any intermediate pose violates the constraint, will return false.
-// This constraint will interpolate between the start and end poses, and ensure that the pose given by interpolating
-// the inputs the same amount does not deviate by more than a set amount.
-func NewInterpolatingConstraint(epsilon float64) Constraint {
-	checkSeq := []float64{0.5, 0.333, 0.25, 0.17}
-	f := func(cInput *ConstraintInput) (bool, float64) {
-		for _, s := range checkSeq {
-			ok := interpolationCheck(cInput, s, epsilon)
-			if !ok {
-				return ok, 0
+// NewCollisionConstraintFromWorldState creates a collision constraint from a world state, framesystem, a model and a set of initial states.
+func NewCollisionConstraintFromWorldState(
+	frame referenceframe.Frame,
+	fs referenceframe.FrameSystem,
+	worldState *commonpb.WorldState,
+	observationInput map[string][]referenceframe.Input,
+) (Constraint, error) {
+	transformGeometriesToWorldFrame := func(gfs []*commonpb.GeometriesInFrame) (*referenceframe.GeometriesInFrame, error) {
+		allGeometries := make(map[string]spatial.Geometry)
+		for name1, gf := range gfs {
+			obstacles, err := referenceframe.ProtobufToGeometriesInFrame(gf)
+			if err != nil {
+				return nil, err
 			}
-			// Check 1 - s if s != 0.5
-			if s != 0.5 {
-				ok := interpolationCheck(cInput, 1-s, epsilon)
-				if !ok {
-					return ok, 0
+			// TODO(rb) it is bad practice to assume that the current inputs of the robot correspond to the passed in world state
+			// the state that observed the worldState should ultimately be included as part of the worldState message
+			tf, err := fs.Transform(observationInput, obstacles, referenceframe.World)
+			if err != nil {
+				return nil, err
+			}
+			for name2, g := range tf.(*referenceframe.GeometriesInFrame).Geometries() {
+				geomName := strconv.Itoa(name1) + "_" + name2
+				if _, present := allGeometries[geomName]; present {
+					return nil, errors.New("multiple geometries with the same name")
 				}
+				allGeometries[geomName] = g
 			}
 		}
-		return true, 0
+		return referenceframe.NewGeometriesInFrame(referenceframe.World, allGeometries), nil
 	}
-	return f
+	obstacles, err := transformGeometriesToWorldFrame(worldState.GetObstacles())
+	if err != nil {
+		return nil, err
+	}
+	interactionSpaces, err := transformGeometriesToWorldFrame(worldState.GetInteractionSpaces())
+	if err != nil {
+		return nil, err
+	}
+
+	// extract inputs corresponding to the frame
+	var goodInputs []referenceframe.Input
+	switch f := frame.(type) {
+	case *solverFrame:
+		goodInputs, err = f.mapToSlice(observationInput)
+	default:
+		goodInputs, err = referenceframe.GetFrameInputs(f, observationInput)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return NewCollisionConstraint(frame, goodInputs, obstacles.Geometries(), interactionSpaces.Geometries()), nil
+}
+
+// NewAbsoluteLinearInterpolatingConstraint provides a Constraint whose valid manifold allows a specified amount of deviation from the
+// shortest straight-line path between the start and the goal. linTol is the allowed linear deviation in mm, orientTol is the allowed
+// orientation deviation measured by norm of the R3AA orientation difference to the slerp path between start/goal orientations.
+func NewAbsoluteLinearInterpolatingConstraint(from, to spatial.Pose, linTol, orientTol float64) (Constraint, Metric) {
+	orientConstraint, orientMetric := NewSlerpOrientationConstraint(from, to, orientTol)
+	lineConstraint, lineMetric := NewLineConstraint(from.Point(), to.Point(), linTol)
+	interpMetric := CombineMetrics(orientMetric, lineMetric)
+
+	f := func(cInput *ConstraintInput) (bool, float64) {
+		oValid, oDist := orientConstraint(cInput)
+		lValid, lDist := lineConstraint(cInput)
+		return oValid && lValid, oDist + lDist
+	}
+	return f, interpMetric
+}
+
+// NewProportionalLinearInterpolatingConstraint will provide the same metric and constraint as NewAbsoluteLinearInterpolatingConstraint,
+// except that allowable linear and orientation deviation is scaled based on the distance from start to goal.
+func NewProportionalLinearInterpolatingConstraint(from, to spatial.Pose, epsilon float64) (Constraint, Metric) {
+	orientTol := epsilon * orientDist(from.Orientation(), to.Orientation())
+	linTol := epsilon * from.Point().Distance(to.Point())
+
+	return NewAbsoluteLinearInterpolatingConstraint(from, to, linTol, orientTol)
 }
 
 // NewJointConstraint returns a constraint which will sum the squared differences in each input from start to end
@@ -228,37 +287,38 @@ func NewOrientationConstraint(orientFunc func(o spatial.Orientation) bool) Const
 	return f
 }
 
-// orientDistToRegion will return a function which will tell you how far the unit sphere component of an orientation
-// vector is from a region defined by a point and an arclength around it. The theta value of OV is disregarded.
-// This is useful, for example, in defining the set of acceptable angles of attack for writing on a whiteboard.
-func orientDistToRegion(goal spatial.Orientation, alpha float64) func(spatial.Orientation) float64 {
-	ov1 := goal.OrientationVectorRadians()
-	return func(o spatial.Orientation) float64 {
-		ov2 := o.OrientationVectorRadians()
-		acosInput := ov1.OX*ov2.OX + ov1.OY*ov2.OY + ov1.OZ*ov2.OZ
+// NewSlerpOrientationConstraint will measure the orientation difference between the orientation of two poses, and return a constraint that
+// returns whether a given orientation is within a given tolerance distance of the shortest arc between the two orientations, as well as a
+// metric which returns the distance to that valid region.
+func NewSlerpOrientationConstraint(start, goal spatial.Pose, tolerance float64) (Constraint, Metric) {
+	var gradFunc func(from, _ spatial.Pose) float64
+	origDist := math.Max(orientDist(start.Orientation(), goal.Orientation()), defaultEpsilon)
 
-		// Account for floating point issues
-		if acosInput > 1.0 {
-			acosInput = 1.0
-		}
-		if acosInput < -1.0 {
-			acosInput = -1.0
-		}
-		dist := math.Acos(acosInput)
-		return math.Max(0, dist-alpha)
-	}
-}
+	gradFunc = func(from, _ spatial.Pose) float64 {
+		sDist := orientDist(start.Orientation(), from.Orientation())
+		gDist := 0.
 
-// NewPoseFlexOVMetric will provide a distance function which will converge on an OV within an arclength of `alpha`
-// of the ov of the goal given. The 3d point of the goal given is discarded, and the function will converge on the
-// 3d point of the `to` pose (this is probably what you want).
-func NewPoseFlexOVMetric(goal spatial.Pose, alpha float64) Metric {
-	oDistFunc := orientDistToRegion(goal.Orientation(), alpha)
-	return func(from, to spatial.Pose) float64 {
-		pDist := from.Point().Distance(to.Point())
-		oDist := oDistFunc(from.Orientation())
-		return pDist*pDist + oDist*oDist
+		// If origDist is less than or equal to defaultEpsilon, then the starting and ending orientations are the same and we do not need
+		// to compute the distance to the ending orientation
+		if origDist > defaultEpsilon {
+			gDist = orientDist(goal.Orientation(), from.Orientation())
+		}
+		return (sDist + gDist) - origDist
 	}
+
+	validFunc := func(cInput *ConstraintInput) (bool, float64) {
+		err := resolveInputsToPositions(cInput)
+		if err != nil {
+			return false, 0
+		}
+		dist := gradFunc(cInput.StartPos, cInput.EndPos)
+		if dist < tolerance {
+			return true, 0
+		}
+		return false, 0
+	}
+
+	return validFunc, gradFunc
 }
 
 // NewPlaneConstraint is used to define a constraint space for a plane, and will return 1) a constraint
@@ -304,18 +364,12 @@ func NewPlaneConstraint(pNorm, pt r3.Vector, writingAngle, epsilon float64) (Con
 }
 
 // NewLineConstraint is used to define a constraint space for a line, and will return 1) a constraint
-// function which will determine whether a point is on the line and in a valid orientation, and 2) a distance function
-// which will bring a pose into the valid constraint space. The OV passed in defines the center of the valid orientation area.
-// angle refers to the maximum unit sphere arc length deviation from the ov
-// epsilon refers to the closeness to the line necessary to be a valid pose.
-func NewLineConstraint(pt1, pt2 r3.Vector, orient spatial.Orientation, writingAngle, epsilon float64) (Constraint, Metric) {
-	// invert the normal to get the valid AOA OV
-	ov := orient.OrientationVectorRadians()
-
-	dFunc := orientDistToRegion(ov, writingAngle)
-
+// function which will determine whether a point is on the line, and 2) a distance function
+// which will bring a pose into the valid constraint space.
+// tolerance refers to the closeness to the line necessary to be a valid pose in mm.
+func NewLineConstraint(pt1, pt2 r3.Vector, tolerance float64) (Constraint, Metric) {
 	// distance from line to point
-	lineDist := func(point r3.Vector) float64 {
+	distToLine := func(point r3.Vector) float64 {
 		ab := pt1.Sub(pt2)
 		av := point.Sub(pt2)
 
@@ -333,11 +387,13 @@ func NewLineConstraint(pt1, pt2 r3.Vector, orient spatial.Orientation, writingAn
 		return dist
 	}
 
-	gradFunc := func(from, _ spatial.Pose) float64 {
-		pDist := lineDist(from.Point())
-		oDist := dFunc(from.Orientation())
+	if pt1.Distance(pt2) < defaultEpsilon {
+		tolerance = defaultEpsilon
+	}
 
-		return pDist*pDist + oDist*oDist
+	gradFunc := func(from, _ spatial.Pose) float64 {
+		pDist := math.Max(distToLine(from.Point())-tolerance, 0)
+		return pDist
 	}
 
 	validFunc := func(cInput *ConstraintInput) (bool, float64) {
@@ -346,7 +402,7 @@ func NewLineConstraint(pt1, pt2 r3.Vector, orient spatial.Orientation, writingAn
 			return false, 0
 		}
 		dist := gradFunc(cInput.StartPos, cInput.EndPos)
-		if dist < epsilon*epsilon {
+		if dist == 0 {
 			return true, 0
 		}
 		return false, dist
@@ -403,17 +459,6 @@ func resolveInputsToPositions(ci *ConstraintInput) error {
 		}
 	}
 	return nil
-}
-
-func interpolationCheck(cInput *ConstraintInput, by, epsilon float64) bool {
-	iPos, err := cInput.Frame.Transform(referenceframe.InterpolateInputs(cInput.StartInput, cInput.EndInput, by))
-	if err != nil {
-		return false
-	}
-	interp := spatial.Interpolate(cInput.StartPos, cInput.EndPos, by)
-	metric := NewSquaredNormMetric()
-	dist := metric(iPos, interp)
-	return dist <= epsilon
 }
 
 // Prevents recalculation of startPos. If no startPos has been calculated, just pass nil.

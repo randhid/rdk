@@ -7,45 +7,41 @@ import (
 	"image/jpeg"
 
 	"github.com/edaniels/golog"
+	"go.opencensus.io/trace"
+	pb "go.viam.com/api/service/slam/v1"
 	"go.viam.com/utils/rpc"
 
 	"go.viam.com/rdk/pointcloud"
-	pb "go.viam.com/rdk/proto/api/service/slam/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/utils"
 	"go.viam.com/rdk/vision"
 )
 
-// client is a client that satisfies the slam.proto contract.
+// client implements SLAMServiceClient.
 type client struct {
+	name   string
 	conn   rpc.ClientConn
 	client pb.SLAMServiceClient
 	logger golog.Logger
 }
 
-// newSvcClientFromConn constructs a new serviceClient using the passed in connection.
-func newSvcClientFromConn(conn rpc.ClientConn, logger golog.Logger) *client {
+// NewClientFromConn constructs a new Client from the connection passed in.
+func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Service {
 	grpcClient := pb.NewSLAMServiceClient(conn)
-	sc := &client{
+	c := &client{
+		name:   name,
 		conn:   conn,
 		client: grpcClient,
 		logger: logger,
 	}
-	return sc
+	return c
 }
 
-// Close cleanly closes the underlying connections.
-func (c *client) Close() error {
-	return nil
-}
+// Position creates a request, calls the slam service Position, and parses the response into the desired PoseInFrame.
+func (c *client) Position(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
+	ctx, span := trace.StartSpan(ctx, "slam::client::Position")
+	defer span.End()
 
-// NewClientFromConn constructs a new Client from the connection passed in.
-func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Service {
-	return newSvcClientFromConn(conn, logger)
-}
-
-// GetPosition creates a request, calls the slam service GetPosition, and parses the response into the desired PoseInFrame.
-func (c *client) GetPosition(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
 	req := &pb.GetPositionRequest{
 		Name: name,
 	}
@@ -62,11 +58,17 @@ func (c *client) GetPosition(ctx context.Context, name string) (*referenceframe.
 func (c *client) GetMap(ctx context.Context, name, mimeType string, cameraPosition *referenceframe.PoseInFrame, includeRobotMarker bool) (
 	string, image.Image, *vision.Object, error,
 ) {
+	ctx, span := trace.StartSpan(ctx, "slam::client::GetMap")
+	defer span.End()
+
 	req := &pb.GetMapRequest{
 		Name:               name,
 		MimeType:           mimeType,
-		CameraPosition:     referenceframe.PoseInFrameToProtobuf(cameraPosition).Pose,
 		IncludeRobotMarker: includeRobotMarker,
+	}
+
+	if cameraPosition != nil {
+		req.CameraPosition = referenceframe.PoseInFrameToProtobuf(cameraPosition).Pose
 	}
 
 	var imageData image.Image
@@ -81,12 +83,18 @@ func (c *client) GetMap(ctx context.Context, name, mimeType string, cameraPositi
 
 	switch mimeType {
 	case utils.MimeTypeJPEG:
+		_, spanDecode := trace.StartSpan(ctx, "slam::client::GetMap::Decode")
+		defer spanDecode.End()
+
 		imData := resp.GetImage()
 		imageData, err = jpeg.Decode(bytes.NewReader(imData))
 		if err != nil {
 			return "", imageData, vObject, err
 		}
 	case utils.MimeTypePCD:
+		_, spanGetPC := trace.StartSpan(ctx, "slam::client::GetMap::GetPointCloud")
+		defer spanGetPC.End()
+
 		pcData := resp.GetPointCloud()
 		pc, err := pointcloud.ReadPCD(bytes.NewReader(pcData.PointCloud))
 		if err != nil {

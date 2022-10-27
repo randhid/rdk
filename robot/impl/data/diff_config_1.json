@@ -1,31 +1,27 @@
 {
-    "components":
-    [
+    "components": [
         {
-            "model": "fake",
             "name": "arm1",
-            "type": "arm"
+            "type": "arm",
+            "model": "fake"
         },
         {
-            "model": "fake",
             "name": "base1",
-            "type": "base"
+            "type": "base",
+            "model": "fake"
         },
         {
-            "model": "fake",
             "name": "board1",
             "type": "board",
-            "attributes":
-            {
-                "analogs":
-                [
+            "model": "fake",
+            "attributes": {
+                "analogs": [
                     {
                         "name": "analog1",
                         "pin": "0"
                     }
                 ],
-                "digital_interrupts":
-                [
+                "digital_interrupts": [
                     {
                         "name": "encoder",
                         "pin": "14"
@@ -34,23 +30,21 @@
             }
         },
         {
-            "model": "${TEST_MODEL_NAME_1-fake}",
             "name": "mock1",
-            "type": "mock"
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_1-fake}"
         },
         {
-            "model": "${TEST_MODEL_NAME_2-fake2}",
             "name": "mock2",
-            "type": "mock"
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_2-fake2}"
         }
     ],
-    "processes":
-    [
+    "processes": [
         {
             "id": "1",
             "name": "echo",
-            "args":
-            [
+            "args": [
                 "hello",
                 "world"
             ],
@@ -59,8 +53,7 @@
         {
             "id": "2",
             "name": "echo",
-            "args":
-            [
+            "args": [
                 "hello",
                 "world",
                 "again"

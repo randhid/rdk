@@ -2,279 +2,75 @@
 package server
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"runtime/pprof"
-	"sync"
 	"time"
 
 	"github.com/edaniels/golog"
-	"github.com/pkg/errors"
-	"go.opencensus.io/trace"
+	"github.com/edaniels/gostream"
+	"github.com/edaniels/gostream/codec/opus"
+	"github.com/edaniels/gostream/codec/x264"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"go.viam.com/utils"
 	"go.viam.com/utils/perf"
 	"go.viam.com/utils/rpc"
 
 	"go.viam.com/rdk/config"
-	"go.viam.com/rdk/rlog"
 	robotimpl "go.viam.com/rdk/robot/impl"
 	"go.viam.com/rdk/robot/web"
 	weboptions "go.viam.com/rdk/robot/web/options"
 )
 
-type wrappedLogger struct {
-	base  zapcore.Core
-	extra []zapcore.Field
-}
-
-func (l *wrappedLogger) Enabled(level zapcore.Level) bool {
-	return l.base.Enabled(level)
-}
-
-func (l *wrappedLogger) With(f []zapcore.Field) zapcore.Core {
-	return &wrappedLogger{l, f}
-}
-
-func (l *wrappedLogger) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	return l.base.Check(e, ce)
-}
-
-func (l *wrappedLogger) Write(e zapcore.Entry, f []zapcore.Field) error {
-	field := []zapcore.Field{}
-	field = append(field, l.extra...)
-	field = append(field, f...)
-	return l.base.Write(e, field)
-}
-
-func (l *wrappedLogger) Sync() error {
-	return l.base.Sync()
-}
-
-func newNetLogger(config *config.Cloud) (*netLogger, error) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return nil, err
-	}
-
-	cancelCtx, cancel := context.WithCancel(context.Background())
-	nl := &netLogger{
-		hostname:  hostname,
-		cfg:       config,
-		cancelCtx: cancelCtx,
-		cancel:    cancel,
-	}
-	nl.activeBackgroundWorkers.Add(1)
-	utils.ManagedGo(nl.backgroundWorker, nl.activeBackgroundWorkers.Done)
-	return nl, nil
-}
-
-type netLogger struct {
-	hostname   string
-	cfg        *config.Cloud
-	httpClient http.Client
-
-	toLogMutex sync.Mutex
-	toLog      []interface{}
-
-	cancelCtx               context.Context
-	cancel                  func()
-	activeBackgroundWorkers sync.WaitGroup
-}
-
-func (nl *netLogger) queueSize() int {
-	nl.toLogMutex.Lock()
-	defer nl.toLogMutex.Unlock()
-	return len(nl.toLog)
-}
-
-func (nl *netLogger) Close() {
-	// try for up to 10 seconds for log queue to clear before cancelling it
-	for i := 0; i < 1000; i++ {
-		if nl.queueSize() == 0 {
-			break
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-	nl.cancel()
-	nl.activeBackgroundWorkers.Wait()
-	nl.httpClient.CloseIdleConnections()
-}
-
-func (nl *netLogger) Enabled(zapcore.Level) bool {
-	return true
-}
-
-func (nl *netLogger) With(f []zapcore.Field) zapcore.Core {
-	return &wrappedLogger{nl, f}
-}
-
-func (nl *netLogger) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	return ce.AddCore(e, nl)
-}
-
-func (nl *netLogger) Write(e zapcore.Entry, f []zapcore.Field) error {
-	// TODO(erh): should we put a _id uuid on here so we don't log twice?
-
-	for idx, ff := range f {
-		if ff.String == "" && ff.Interface != nil {
-			ff.String = fmt.Sprintf("%v", ff.Interface)
-			f[idx] = ff
-		}
-	}
-
-	x := map[string]interface{}{
-		"id":     nl.cfg.ID,
-		"host":   nl.hostname,
-		"log":    e,
-		"fields": f,
-	}
-
-	nl.addToQueue(x)
-
-	if e.Level == zapcore.FatalLevel || e.Level == zapcore.DPanicLevel || e.Level == zapcore.PanicLevel {
-		// program is going to go away, let's try and sync all our messages before then
-		return nl.Sync()
-	}
-
-	return nil
-}
-
-func (nl *netLogger) addToQueue(x interface{}) {
-	nl.toLogMutex.Lock()
-	defer nl.toLogMutex.Unlock()
-
-	if len(nl.toLog) > 20000 {
-		// TODO(erh): sample?
-		nl.toLog = nl.toLog[1:]
-	}
-	nl.toLog = append(nl.toLog, x)
-}
-
-func (nl *netLogger) writeToServer(x interface{}) error {
-	js, err := json.Marshal(x)
-	if err != nil {
-		return err
-	}
-
-	// we specifically don't use a parented cancellable context here so we can make sure we finish writing but
-	// we will only give it up to 5 seconds to do so in case we are trying to shutdown.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost, nl.cfg.LogPath, bytes.NewReader(js))
-	if err != nil {
-		return errors.Wrap(err, "error creating log request")
-	}
-	r.Header.Set("Secret", nl.cfg.Secret)
-
-	resp, err := nl.httpClient.Do(r)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		utils.UncheckedError(resp.Body.Close())
-	}()
-	return nil
-}
-
-func (nl *netLogger) backgroundWorker() {
-	normalInterval := 100 * time.Millisecond
-	abnormalInterval := 5 * time.Second
-	interval := normalInterval
-	for {
-		cancelled := false
-		if !utils.SelectContextOrWait(nl.cancelCtx, interval) {
-			cancelled = true
-		}
-		err := nl.Sync()
-		if err != nil && !errors.Is(err, context.Canceled) {
-			interval = abnormalInterval
-			// fall back to regular logging
-			rlog.Logger.Infof("error logging to network: %s", err)
-		} else {
-			interval = normalInterval
-		}
-		if cancelled {
-			return
-		}
-	}
-}
-
-func (nl *netLogger) Sync() error {
-	// TODO(erh): batch writes
-
-	for {
-		x := func() interface{} {
-			nl.toLogMutex.Lock()
-			defer nl.toLogMutex.Unlock()
-
-			if len(nl.toLog) == 0 {
-				return nil
-			}
-
-			x := nl.toLog[0]
-			nl.toLog = nl.toLog[1:]
-
-			return x
-		}()
-
-		if x == nil {
-			return nil
-		}
-
-		err := nl.writeToServer(x)
-		if err != nil {
-			nl.addToQueue(x) // we'll try again later
-			return err
-		}
-	}
-}
-
-func addCloudLogger(logger golog.Logger, cfg *config.Cloud) (golog.Logger, func(), error) {
-	nl, err := newNetLogger(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	l := logger.Desugar()
-	l = l.WithOptions(zap.WrapCore(func(c zapcore.Core) zapcore.Core {
-		return zapcore.NewTee(c, nl)
-	}))
-	return l.Sugar(), nl.Close, nil
-}
-
 // Arguments for the command.
 type Arguments struct {
-	AllowInsecureCreds bool   `flag:"allow-insecure-creds,usage=allow connections to send credentials over plaintext"`
-	ConfigFile         string `flag:"0,required,usage=robot config file"`
-	CPUProfile         string `flag:"cpuprofile,usage=write cpu profile to file"`
-	Debug              bool   `flag:"debug"`
-	LogURL             string `flag:"logurl,usage=url to log messages to"`
-	SharedDir          string `flag:"shareddir,usage=web resource directory"`
-	Version            bool   `flag:"version,usage=print version"`
-	WebProfile         bool   `flag:"webprofile,usage=include profiler in http server"`
-	WebRTC             bool   `flag:"webrtc,usage=force webrtc connections instead of direct"`
+	AllowInsecureCreds         bool   `flag:"allow-insecure-creds,usage=allow connections to send credentials over plaintext"`
+	ConfigFile                 string `flag:"config,usage=robot config file"`
+	CPUProfile                 string `flag:"cpuprofile,usage=write cpu profile to file"`
+	Debug                      bool   `flag:"debug"`
+	SharedDir                  string `flag:"shareddir,usage=web resource directory"`
+	Version                    bool   `flag:"version,usage=print version"`
+	WebProfile                 bool   `flag:"webprofile,usage=include profiler in http server"`
+	WebRTC                     bool   `flag:"webrtc,usage=force webrtc connections instead of direct"`
+	RevealSensitiveConfigDiffs bool   `flag:"reveal-sensitive-config-diffs,usage=show config diffs"`
+}
+
+type robotServer struct {
+	args      Arguments
+	logConfig zap.Config
+	logger    *zap.SugaredLogger
 }
 
 // RunServer is an entry point to starting the web server that can be called by main in a code
 // sample or otherwise be used to initialize the server.
-func RunServer(ctx context.Context, args []string, logger golog.Logger) (err error) {
+func RunServer(ctx context.Context, args []string, _ golog.Logger) (err error) {
 	var argsParsed Arguments
 	if err := utils.ParseFlags(args, &argsParsed); err != nil {
 		return err
 	}
 
+	// Replace logger with logger based on flags.
+	var logConfig zap.Config
+	if argsParsed.Debug {
+		logConfig = golog.NewDevelopmentLoggerConfig()
+	} else {
+		logConfig = golog.NewProductionLoggerConfig()
+	}
+	rdkLogLevel := logConfig.Level
+	logger := zap.Must(logConfig.Build()).Sugar().Named("robot_server")
+	golog.ReplaceGloabl(logger)
+
 	// Always log the version, return early if the '-version' flag was provided
 	// fmt.Println would be better but fails linting. Good enough.
 	logger.Infof("Viam RDK Version: %s, Hash: %s", config.Version, config.GitRevision)
 	if argsParsed.Version {
+		return
+	}
+
+	if argsParsed.ConfigFile == "" {
+		logger.Error("please specify a config file through the -config parameter.")
 		return
 	}
 
@@ -290,44 +86,80 @@ func RunServer(ctx context.Context, args []string, logger golog.Logger) (err err
 		defer pprof.StopCPUProfile()
 	}
 
-	exp := perf.NewNiceLoggingSpanExporter()
-	trace.RegisterExporter(exp)
-	trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()})
-
+	// Read the config from disk and use it to initialize the remote logger.
 	initialReadCtx, cancel := context.WithTimeout(ctx, time.Second*5)
-	cfg, err := config.Read(initialReadCtx, argsParsed.ConfigFile, logger)
+	cfgFromDisk, err := config.ReadLocalConfig(initialReadCtx, argsParsed.ConfigFile, logger)
 	if err != nil {
 		cancel()
 		return err
 	}
 	cancel()
 
-	if cfg.Cloud != nil && cfg.Cloud.LogPath != "" {
+	if argsParsed.Debug {
+		exporter := perf.NewDevelopmentExporter()
+		if err := exporter.Start(); err != nil {
+			return err
+		}
+		defer exporter.Stop()
+	}
+
+	// Start remote logging with config from disk.
+	// This is to ensure we make our best effort to write logs for failures loading the remote config.
+	if cfgFromDisk.Cloud != nil && (cfgFromDisk.Cloud.LogPath != "" || cfgFromDisk.Cloud.AppAddress != "") {
 		var closer func()
-		logger, closer, err = addCloudLogger(logger, cfg.Cloud)
+		logger, closer, err = addCloudLogger(logger, rdkLogLevel, cfgFromDisk.Cloud)
 		if err != nil {
 			return err
 		}
 		defer closer()
+
+		golog.ReplaceGloabl(logger)
 	}
 
-	err = serveWeb(ctx, cfg, argsParsed, logger)
-	if err != nil {
-		logger.Errorw("error serving web", "error", err)
+	server := robotServer{
+		logConfig: logConfig,
+		logger:    logger,
+		args:      argsParsed,
 	}
+
+	// Run the server with remote logging enabled.
+	err = server.runServer(ctx)
+	if err != nil {
+		logger.Error("Fatal error running server, exiting now: ", err)
+	}
+
 	return err
 }
 
-func createWebOptions(cfg *config.Config, argsParsed Arguments, logger golog.Logger) (weboptions.Options, error) {
+// runServer is an entry point to starting the web server after the local config is read. Once the local config
+// is read the logger may be initialized to remote log. This ensure we capture errors starting up the server and report to the cloud.
+func (s *robotServer) runServer(ctx context.Context) error {
+	initialReadCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	cfg, err := config.Read(initialReadCtx, s.args.ConfigFile, s.logger)
+	if err != nil {
+		cancel()
+		return err
+	}
+	cancel()
+
+	err = s.serveWeb(ctx, cfg)
+	if err != nil {
+		s.logger.Errorw("error serving web", "error", err)
+	}
+
+	return err
+}
+
+func (s *robotServer) createWebOptions(cfg *config.Config) (weboptions.Options, error) {
 	options, err := weboptions.FromConfig(cfg)
 	if err != nil {
 		return weboptions.Options{}, err
 	}
-	options.Pprof = argsParsed.WebProfile
-	options.SharedDir = argsParsed.SharedDir
-	options.Debug = argsParsed.Debug
-	options.WebRTC = argsParsed.WebRTC
-	if cfg.Cloud != nil && argsParsed.AllowInsecureCreds {
+	options.Pprof = s.args.WebProfile
+	options.SharedDir = s.args.SharedDir
+	options.Debug = s.args.Debug || cfg.Debug
+	options.WebRTC = s.args.WebRTC
+	if cfg.Cloud != nil && s.args.AllowInsecureCreds {
 		options.SignalingDialOpts = append(options.SignalingDialOpts, rpc.WithAllowInsecureWithCredentialsDowngrade())
 	}
 
@@ -337,13 +169,13 @@ func createWebOptions(cfg *config.Config, argsParsed Arguments, logger golog.Log
 			return weboptions.Options{}, err
 		}
 		if host == "" || host == "0.0.0.0" || host == "::" {
-			logger.Warn("binding to all interfaces without authentication")
+			s.logger.Warn("binding to all interfaces without authentication")
 		}
 	}
 	return options, nil
 }
 
-func serveWeb(ctx context.Context, cfg *config.Config, argsParsed Arguments, logger golog.Logger) (err error) {
+func (s *robotServer) serveWeb(ctx context.Context, cfg *config.Config) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	rpcDialer := rpc.NewCachedDialer()
@@ -358,9 +190,9 @@ func serveWeb(ctx context.Context, cfg *config.Config, argsParsed Arguments, log
 		if err != nil {
 			return nil, err
 		}
-		out.Debug = argsParsed.Debug
+		out.Debug = s.args.Debug || cfg.Debug
 		out.FromCommand = true
-		out.AllowInsecureCreds = argsParsed.AllowInsecureCreds
+		out.AllowInsecureCreds = s.args.AllowInsecureCreds
 		return out, nil
 	}
 
@@ -368,7 +200,49 @@ func serveWeb(ctx context.Context, cfg *config.Config, argsParsed Arguments, log
 	if err != nil {
 		return err
 	}
-	myRobot, err := robotimpl.New(ctx, processedConfig, logger)
+
+	if processedConfig.Cloud != nil {
+		utils.PanicCapturingGo(func() {
+			restartCheck, err := newRestartChecker(ctx, cfg.Cloud, s.logger)
+			if err != nil {
+				s.logger.Panicw("error creating restart checker", "error", err)
+				cancel()
+				return
+			}
+			defer restartCheck.close()
+			restartInterval := defaultNeedsRestartCheckInterval
+
+			for {
+				if !utils.SelectContextOrWait(ctx, restartInterval) {
+					return
+				}
+
+				mustRestart, newRestartInterval, err := restartCheck.needsRestart(ctx)
+				if err != nil {
+					s.logger.Infow("failed to check restart", "error", err)
+					continue
+				}
+
+				restartInterval = newRestartInterval
+
+				if mustRestart {
+					cancel()
+					return
+				}
+			}
+		})
+	}
+
+	var streamConfig gostream.StreamConfig
+	streamConfig.AudioEncoderFactory = opus.NewEncoderFactory()
+	streamConfig.VideoEncoderFactory = x264.NewEncoderFactory()
+
+	robotOptions := []robotimpl.Option{robotimpl.WithWebOptions(web.WithStreamConfig(streamConfig))}
+	if s.args.RevealSensitiveConfigDiffs {
+		robotOptions = append(robotOptions, robotimpl.WithRevealSensitiveConfigDiffs())
+	}
+
+	myRobot, err := robotimpl.New(ctx, processedConfig, s.logger, robotOptions...)
 	if err != nil {
 		return err
 	}
@@ -377,7 +251,7 @@ func serveWeb(ctx context.Context, cfg *config.Config, argsParsed Arguments, log
 	}()
 
 	// watch for and deliver changes to the robot
-	watcher, err := config.NewWatcher(ctx, cfg, logger)
+	watcher, err := config.NewWatcher(ctx, cfg, s.logger)
 	if err != nil {
 		return err
 	}
@@ -399,32 +273,29 @@ func serveWeb(ctx context.Context, cfg *config.Config, argsParsed Arguments, log
 			case cfg := <-watcher.Config():
 				processedConfig, err := processConfig(cfg)
 				if err != nil {
-					logger.Errorw("error processing config", "error", err)
+					s.logger.Errorw("error processing config", "error", err)
 					continue
 				}
-				if err := myRobot.Reconfigure(ctx, processedConfig); err != nil {
-					logger.Fatalw("error reconfiguring robot", "error", err)
-					continue
-				}
+				myRobot.Reconfigure(ctx, processedConfig)
 
 				// restart web service if necessary
-				diff, err := config.DiffConfigs(oldCfg, processedConfig)
+				diff, err := config.DiffConfigs(*oldCfg, *processedConfig, s.args.RevealSensitiveConfigDiffs)
 				if err != nil {
-					logger.Errorw("error diffing config", "error", err)
+					s.logger.Errorw("error diffing config", "error", err)
 					continue
 				}
 				if !diff.NetworkEqual {
 					if err := myRobot.StopWeb(); err != nil {
-						logger.Errorw("error stopping web service while reconfiguring", "error", err)
+						s.logger.Errorw("error stopping web service while reconfiguring", "error", err)
 						continue
 					}
-					options, err := createWebOptions(processedConfig, argsParsed, logger)
+					options, err := s.createWebOptions(processedConfig)
 					if err != nil {
-						logger.Errorw("error creating weboptions", "error", err)
+						s.logger.Errorw("error creating weboptions", "error", err)
 						continue
 					}
 					if err := myRobot.StartWeb(ctx, options); err != nil {
-						logger.Errorw("error starting web service while reconfiguring", "error", err)
+						s.logger.Errorw("error starting web service while reconfiguring", "error", err)
 					}
 				}
 				oldCfg = processedConfig
@@ -438,6 +309,9 @@ func serveWeb(ctx context.Context, cfg *config.Config, argsParsed Arguments, log
 	}()
 	defer cancel()
 
-	options, err := createWebOptions(processedConfig, argsParsed, logger)
-	return web.RunWeb(ctx, myRobot, options, logger)
+	options, err := s.createWebOptions(processedConfig)
+	if err != nil {
+		return err
+	}
+	return web.RunWeb(ctx, myRobot, options, s.logger)
 }

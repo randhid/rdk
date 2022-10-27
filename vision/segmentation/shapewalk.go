@@ -94,26 +94,26 @@ func (ws *walkState) valid(p image.Point) bool {
 }
 
 /*
-func (ws *walkState) towardsCenter(p image.Point, amount int) image.Point {
-	xd := p.X - ws.originalPoint.X
-	yd := p.Y - ws.originalPoint.Y
+	func (ws *walkState) towardsCenter(p image.Point, amount int) image.Point {
+		xd := p.X - ws.originalPoint.X
+		yd := p.Y - ws.originalPoint.Y
 
-	ret := p
+		ret := p
 
-	if xd < 0 {
-		ret.X += utils.MinInt(amount, utils.AbsInt(xd))
-	} else if xd > 0 {
-		ret.X -= utils.MinInt(amount, utils.AbsInt(xd))
-	}
+		if xd < 0 {
+			ret.X += utils.MinInt(amount, utils.AbsInt(xd))
+		} else if xd > 0 {
+			ret.X -= utils.MinInt(amount, utils.AbsInt(xd))
+		}
 
-	if yd < 0 {
-		ret.Y += utils.MinInt(amount, utils.AbsInt(yd))
-	} else if yd > 0 {
-		ret.Y -= utils.MinInt(amount, utils.AbsInt(yd))
-	}
+		if yd < 0 {
+			ret.Y += utils.MinInt(amount, utils.AbsInt(yd))
+		} else if yd > 0 {
+			ret.Y -= utils.MinInt(amount, utils.AbsInt(yd))
+		}
 
-	return ret
-}.
+		return ret
+	}.
 */
 func (ws *walkState) isPixelIsCluster(p image.Point, clusterNumber int, path []image.Point) bool {
 	v := ws.dots.get(p)
@@ -395,21 +395,22 @@ func (ws *walkState) lookForWeirdShapes(clusterNumber int) int {
 }
 
 // ShapeWalk TODO.
-func ShapeWalk(img *rimage.ImageWithDepth, start image.Point, options ShapeWalkOptions, logger golog.Logger) (*SegmentedImage, error) {
-	return ShapeWalkMultiple(img, []image.Point{start}, options, logger)
+func ShapeWalk(img *rimage.Image, dm *rimage.DepthMap, start image.Point, options ShapeWalkOptions, logger golog.Logger,
+) (*SegmentedImage, error) {
+	return ShapeWalkMultiple(img, dm, []image.Point{start}, options, logger)
 }
 
 // ShapeWalkMultiple TODO.
 func ShapeWalkMultiple(
-	img *rimage.ImageWithDepth,
+	img *rimage.Image, dm *rimage.DepthMap,
 	starts []image.Point,
 	options ShapeWalkOptions,
 	logger golog.Logger,
 ) (*SegmentedImage, error) {
 	ws := walkState{
-		img:       img.Color,
-		depth:     img.Depth,
-		dots:      newSegmentedImage(img.Color),
+		img:       img,
+		depth:     dm,
+		dots:      newSegmentedImage(img),
 		options:   options,
 		threshold: DefaultColorThreshold + options.ThresholdMod,
 		logger:    logger,
@@ -435,12 +436,13 @@ func (e MyWalkError) Error() string {
 }
 
 // ShapeWalkEntireDebug TODO.
-func ShapeWalkEntireDebug(img *rimage.ImageWithDepth, options ShapeWalkOptions, logger golog.Logger) (*SegmentedImage, error) {
+func ShapeWalkEntireDebug(img *rimage.Image, dm *rimage.DepthMap, options ShapeWalkOptions, logger golog.Logger,
+) (*SegmentedImage, error) {
 	var si *SegmentedImage
 	var err error
 
 	for extra := 0.0; extra < .7; extra += .2 {
-		si, err = shapeWalkEntireDebugOnePass(img, options, extra, logger)
+		si, err = shapeWalkEntireDebugOnePass(img, dm, options, extra, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -459,15 +461,15 @@ func ShapeWalkEntireDebug(img *rimage.ImageWithDepth, options ShapeWalkOptions, 
 }
 
 func shapeWalkEntireDebugOnePass(
-	img *rimage.ImageWithDepth,
+	img *rimage.Image, dm *rimage.DepthMap,
 	options ShapeWalkOptions,
 	extraThreshold float64,
 	logger golog.Logger,
 ) (*SegmentedImage, error) {
 	ws := walkState{
-		img:       img.Color,
-		depth:     img.Depth,
-		dots:      newSegmentedImage(img.Color),
+		img:       img,
+		depth:     dm,
+		dots:      newSegmentedImage(img),
 		options:   options,
 		threshold: DefaultColorThreshold + options.ThresholdMod + extraThreshold,
 		logger:    logger,

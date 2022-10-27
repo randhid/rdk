@@ -4,24 +4,26 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/edaniels/golog"
+	"github.com/golang/geo/r3"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"go.viam.com/test"
 	"go.viam.com/utils/pexec"
 	"go.viam.com/utils/rpc"
 
-	"go.viam.com/rdk/component/board"
-	// board attribute converters.
-	_ "go.viam.com/rdk/component/board/fake"
-	"go.viam.com/rdk/component/motor"
-	// motor attribute converters.
-	_ "go.viam.com/rdk/component/motor/fake"
+	"go.viam.com/rdk/components/board"
+	fakeboard "go.viam.com/rdk/components/board/fake"
+	"go.viam.com/rdk/components/encoder"
+	fakemotor "go.viam.com/rdk/components/motor/fake"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/spatialmath"
 	rutils "go.viam.com/rdk/utils"
 )
 
@@ -32,8 +34,13 @@ func TestConfigRobot(t *testing.T) {
 
 	test.That(t, cfg.Components, test.ShouldHaveLength, 4)
 	test.That(t, len(cfg.Remotes), test.ShouldEqual, 2)
-	test.That(t, cfg.Remotes[0], test.ShouldResemble, config.Remote{Name: "one", Address: "foo", Prefix: true})
+	test.That(t, cfg.Remotes[0], test.ShouldResemble, config.Remote{Name: "one", Address: "foo"})
 	test.That(t, cfg.Remotes[1], test.ShouldResemble, config.Remote{Name: "two", Address: "bar"})
+
+	// test that gripper geometry is being added correctly
+	component := cfg.FindComponent("pieceGripper")
+	bc, _ := spatialmath.NewBoxCreator(r3.Vector{1, 2, 3}, spatialmath.NewPoseFromPoint(r3.Vector{4, 5, 6}))
+	test.That(t, component.Frame.Geometry, test.ShouldResemble, bc)
 }
 
 func TestConfig3(t *testing.T) {
@@ -54,7 +61,7 @@ func TestConfig3(t *testing.T) {
 	cfg, err := config.Read(context.Background(), "data/config3.json", logger)
 	test.That(t, err, test.ShouldBeNil)
 
-	test.That(t, len(cfg.Components), test.ShouldEqual, 3)
+	test.That(t, len(cfg.Components), test.ShouldEqual, 4)
 	test.That(t, cfg.Components[0].Attributes.Int("foo", 0), test.ShouldEqual, 5)
 	test.That(t, cfg.Components[0].Attributes.Bool("foo2", false), test.ShouldEqual, true)
 	test.That(t, cfg.Components[0].Attributes.Bool("foo3", false), test.ShouldEqual, false)
@@ -73,7 +80,7 @@ func TestConfig3(t *testing.T) {
 	test.That(t, cfg.Components[0].Attributes.Float64("bar5", 1.1), test.ShouldEqual, 5.17)
 	test.That(t, cfg.Components[0].Attributes.Float64("bar5-no", 1.1), test.ShouldEqual, 1.1)
 
-	test.That(t, cfg.Components[1].ConvertedAttributes, test.ShouldResemble, &board.Config{
+	test.That(t, cfg.Components[1].ConvertedAttributes, test.ShouldResemble, &fakeboard.Config{
 		Analogs: []board.AnalogConfig{
 			{Name: "analog1", Pin: "0"},
 		},
@@ -81,15 +88,21 @@ func TestConfig3(t *testing.T) {
 			{Name: "encoder", Pin: "14"},
 		},
 	})
-	test.That(t, cfg.Components[2].ConvertedAttributes, test.ShouldResemble, &motor.Config{
-		Pins: motor.PinConfig{
+	test.That(t, cfg.Components[2].ConvertedAttributes, test.ShouldResemble, &fakemotor.Config{
+		Pins: fakemotor.PinConfig{
 			Direction: "io17",
 			PWM:       "io18",
 		},
-		EncoderA:         "encoder-steering-b",
-		EncoderB:         "encoder-steering-a",
-		TicksPerRotation: 10000,
+		Encoder:          "encoder1",
 		MaxPowerPct:      0.5,
+		TicksPerRotation: 10000,
+	})
+	test.That(t, cfg.Components[3].ConvertedAttributes, test.ShouldResemble, &encoder.IncrementalConfig{
+		Pins: encoder.IncrementalPins{
+			A: "encoder-steering-b",
+			B: "encoder-steering-a",
+		},
+		BoardName: "board1",
 	})
 }
 
@@ -231,6 +244,12 @@ func TestConfigEnsure(t *testing.T) {
 	test.That(t, err.Error(), test.ShouldContainSubstring, `bind_address`)
 	test.That(t, err.Error(), test.ShouldContainSubstring, `missing port`)
 
+	invalidNetwork.Network.BindAddress = "woop"
+	invalidNetwork.Network.Listener = &net.TCPListener{}
+	err = invalidNetwork.Ensure(false)
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, `only set one of`)
+
 	invalidAuthConfig := config.Config{
 		Auth: config.AuthConfig{},
 	}
@@ -276,6 +295,62 @@ func TestConfigEnsure(t *testing.T) {
 		validAPIKeyHandler,
 	}
 	test.That(t, invalidAuthConfig.Ensure(false), test.ShouldBeNil)
+
+	validAPIKeyHandler.Config = config.AttributeMap{
+		"keys": []string{},
+	}
+	invalidAuthConfig.Auth.Handlers = []config.AuthHandlerConfig{
+		validAPIKeyHandler,
+	}
+	err = invalidAuthConfig.Ensure(false)
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, `auth.handlers.0`)
+	test.That(t, err.Error(), test.ShouldContainSubstring, `required`)
+	test.That(t, err.Error(), test.ShouldContainSubstring, `key`)
+
+	validAPIKeyHandler.Config = config.AttributeMap{
+		"keys": []string{"one", "two"},
+	}
+	invalidAuthConfig.Auth.Handlers = []config.AuthHandlerConfig{
+		validAPIKeyHandler,
+	}
+
+	test.That(t, invalidAuthConfig.Ensure(false), test.ShouldBeNil)
+}
+
+func TestCopyOnlyPublicFields(t *testing.T) {
+	t.Run("copy sample config", func(t *testing.T) {
+		content, err := os.ReadFile("data/robot.json")
+		test.That(t, err, test.ShouldBeNil)
+		var cfg config.Config
+		json.Unmarshal(content, &cfg)
+
+		cfgCopy, err := cfg.CopyOnlyPublicFields()
+		test.That(t, err, test.ShouldBeNil)
+
+		test.That(t, *cfgCopy, test.ShouldResemble, cfg)
+	})
+
+	t.Run("should not copy unexported json fields", func(t *testing.T) {
+		cfg := &config.Config{
+			Cloud: &config.Cloud{
+				TLSCertificate: "abc",
+			},
+			Network: config.NetworkConfig{
+				NetworkConfigData: config.NetworkConfigData{
+					TLSConfig: &tls.Config{
+						Time: time.Now().UTC,
+					},
+				},
+			},
+		}
+
+		cfgCopy, err := cfg.CopyOnlyPublicFields()
+		test.That(t, err, test.ShouldBeNil)
+
+		test.That(t, cfgCopy.Cloud.TLSCertificate, test.ShouldEqual, cfg.Cloud.TLSCertificate)
+		test.That(t, cfgCopy.Network.TLSConfig, test.ShouldBeNil)
+	})
 }
 
 func TestConfigSortComponents(t *testing.T) {
@@ -339,11 +414,14 @@ func TestConfigSortComponents(t *testing.T) {
 			nil,
 			"not unique",
 		},
+		// TODO(RSDK-427): this check just raises a warning if a dependency is missing.
+		// We cannot actually make the check fail since it will always fail for remote
+		// dependencies.
 		{
 			"dependency not found",
 			[]config.Component{c2},
-			nil,
-			"does not exist",
+			[]config.Component{c2},
+			"",
 		},
 		{
 			"circular dependency",

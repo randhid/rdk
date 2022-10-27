@@ -1,15 +1,17 @@
 // Package objectdetection defines a functional way to create object detection pipelines by feeding in
-// images from a gostream.ImageSource source.
+// images from a gostream.VideoSource source.
 package objectdetection
 
 import (
+	"context"
+	"fmt"
 	"image"
 
 	"github.com/pkg/errors"
 )
 
 // Detector returns a slice of object detections from an input image.
-type Detector func(image.Image) ([]Detection, error)
+type Detector func(context.Context, image.Image) ([]Detection, error)
 
 // Build zips up a preprocessor-detector-postprocessor stream into a detector.
 func Build(prep Preprocessor, det Detector, post Postprocessor) (Detector, error) {
@@ -22,9 +24,9 @@ func Build(prep Preprocessor, det Detector, post Postprocessor) (Detector, error
 	if post == nil {
 		post = func(inp []Detection) []Detection { return inp }
 	}
-	return func(img image.Image) ([]Detection, error) {
+	return func(ctx context.Context, img image.Image) ([]Detection, error) {
 		preprocessed := prep(img)
-		detections, err := det(preprocessed)
+		detections, err := det(ctx, preprocessed)
 		if err != nil {
 			return nil, err
 		}
@@ -64,4 +66,9 @@ func (d *detection2D) Score() float64 {
 // Label returns the class label of the object in the bounding box.
 func (d *detection2D) Label() string {
 	return d.label
+}
+
+// String turns the detection into a string.
+func (d *detection2D) String() string {
+	return fmt.Sprintf("Label: %s, Score: %.2f, Box: %v", d.label, d.score, d.boundingBox)
 }

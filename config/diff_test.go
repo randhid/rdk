@@ -8,10 +8,12 @@ import (
 	"github.com/edaniels/golog"
 	"go.viam.com/test"
 	"go.viam.com/utils/pexec"
+	"go.viam.com/utils/rpc"
 
-	"go.viam.com/rdk/component/arm"
-	"go.viam.com/rdk/component/base"
-	"go.viam.com/rdk/component/board"
+	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/base"
+	"go.viam.com/rdk/components/board"
+	fakeboard "go.viam.com/rdk/components/board/fake"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/resource"
 )
@@ -22,12 +24,10 @@ func TestDiffConfigs(t *testing.T) {
 			{
 				Name:    "remote1",
 				Address: "addr1",
-				Prefix:  false,
 			},
 			{
 				Name:    "remote2",
 				Address: "addr2",
-				Prefix:  false,
 			},
 		},
 		Components: []config.Component{
@@ -54,7 +54,7 @@ func TestDiffConfigs(t *testing.T) {
 				Name:      "board1",
 				Model:     "fake",
 				Type:      board.SubtypeName,
-				ConvertedAttributes: &board.Config{
+				ConvertedAttributes: &fakeboard.Config{
 					Analogs: []board.AnalogConfig{
 						{
 							Name: "analog1",
@@ -90,12 +90,10 @@ func TestDiffConfigs(t *testing.T) {
 			{
 				Name:    "remote1",
 				Address: "addr3",
-				Prefix:  false,
 			},
 			{
 				Name:    "remote2",
 				Address: "addr4",
-				Prefix:  false,
 			},
 		},
 		Components: []config.Component{
@@ -122,7 +120,7 @@ func TestDiffConfigs(t *testing.T) {
 				Name:      "board1",
 				Model:     "fake",
 				Type:      board.SubtypeName,
-				ConvertedAttributes: &board.Config{
+				ConvertedAttributes: &fakeboard.Config{
 					Analogs: []board.AnalogConfig{
 						{
 							Name: "analog1",
@@ -237,7 +235,7 @@ func TestDiffConfigs(t *testing.T) {
 							Name:      "board2",
 							Type:      board.SubtypeName,
 							Model:     "fake",
-							ConvertedAttributes: &board.Config{
+							ConvertedAttributes: &fakeboard.Config{
 								DigitalInterrupts: []board.DigitalInterruptConfig{{Name: "encoder2", Pin: "16"}},
 							},
 						},
@@ -277,7 +275,7 @@ func TestDiffConfigs(t *testing.T) {
 							Name:      "board1",
 							Type:      board.SubtypeName,
 							Model:     "fake",
-							ConvertedAttributes: &board.Config{
+							ConvertedAttributes: &fakeboard.Config{
 								Analogs: []board.AnalogConfig{{Name: "analog1", Pin: "1"}},
 							},
 						},
@@ -317,14 +315,16 @@ func TestDiffConfigs(t *testing.T) {
 			},
 		},
 	} {
+		// test with revealSensitiveConfigDiffs = true
 		t.Run(tc.Name, func(t *testing.T) {
+			revealSensitiveConfigDiffs := true
 			logger := golog.NewTestLogger(t)
 			left, err := config.Read(context.Background(), tc.LeftFile, logger)
 			test.That(t, err, test.ShouldBeNil)
 			right, err := config.Read(context.Background(), tc.RightFile, logger)
 			test.That(t, err, test.ShouldBeNil)
 
-			diff, err := config.DiffConfigs(left, right)
+			diff, err := config.DiffConfigs(*left, *right, revealSensitiveConfigDiffs)
 			test.That(t, err, test.ShouldBeNil)
 			test.That(t, diff.Left, test.ShouldResemble, left)
 			test.That(t, diff.Right, test.ShouldResemble, right)
@@ -332,6 +332,30 @@ func TestDiffConfigs(t *testing.T) {
 				test.That(t, diff.PrettyDiff, test.ShouldBeEmpty)
 			} else {
 				test.That(t, diff.PrettyDiff, test.ShouldNotBeEmpty)
+			}
+			diff.PrettyDiff = ""
+			tc.Expected.Left = diff.Left
+			tc.Expected.Right = diff.Right
+
+			test.That(t, diff, test.ShouldResemble, &tc.Expected)
+		})
+
+		// test with revealSensitiveConfigDiffss = false
+		t.Run(tc.Name, func(t *testing.T) {
+			revealSensitiveConfigDiffs := false
+			logger := golog.NewTestLogger(t)
+			left, err := config.Read(context.Background(), tc.LeftFile, logger)
+			test.That(t, err, test.ShouldBeNil)
+			right, err := config.Read(context.Background(), tc.RightFile, logger)
+			test.That(t, err, test.ShouldBeNil)
+
+			diff, err := config.DiffConfigs(*left, *right, revealSensitiveConfigDiffs)
+			test.That(t, err, test.ShouldBeNil)
+			test.That(t, diff.Left, test.ShouldResemble, left)
+			test.That(t, diff.Right, test.ShouldResemble, right)
+			// even when we expect different resources, we should see an empty prettyDiff
+			if !tc.Expected.ResourcesEqual {
+				test.That(t, diff.PrettyDiff, test.ShouldBeEmpty)
 			}
 			diff.PrettyDiff = ""
 			tc.Expected.Left = diff.Left
@@ -350,18 +374,6 @@ func TestDiffConfigHeterogenousTypes(t *testing.T) {
 		Expected  string
 	}{
 		{
-			"component type",
-			"data/diff_config_1.json",
-			"data/diff_config_1_component_type.json",
-			"cannot modify type of existing component",
-		},
-		{
-			"component subtype",
-			"data/diff_config_1.json",
-			"data/diff_config_1_component_subtype.json",
-			"cannot modify type of existing component",
-		},
-		{
 			"component model",
 			"data/diff_config_1.json",
 			"data/diff_config_1_component_model.json",
@@ -375,7 +387,7 @@ func TestDiffConfigHeterogenousTypes(t *testing.T) {
 			right, err := config.Read(context.Background(), tc.RightFile, logger)
 			test.That(t, err, test.ShouldBeNil)
 
-			_, err = config.DiffConfigs(left, right)
+			_, err = config.DiffConfigs(*left, *right, true)
 			if tc.Expected == "" {
 				test.That(t, err, test.ShouldBeNil)
 				return
@@ -499,10 +511,99 @@ func TestDiffNetworkingCfg(t *testing.T) {
 		},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			diff, err := config.DiffConfigs(&tc.LeftCfg, &tc.RightCfg)
+			diff, err := config.DiffConfigs(tc.LeftCfg, tc.RightCfg, true)
 			test.That(t, err, test.ShouldBeNil)
 
 			test.That(t, diff.NetworkEqual, test.ShouldEqual, tc.NetworkEqual)
 		})
+	}
+}
+
+func TestDiffSanitize(t *testing.T) {
+	cloud1 := &config.Cloud{
+		ID:             "1",
+		Secret:         "hello",
+		LocationSecret: "world",
+		TLSCertificate: "foo",
+		TLSPrivateKey:  "bar",
+	}
+
+	// cloud
+	// remotes.remote.auth.creds
+	// remotes.remote.auth.signaling creds
+	// remote.secret
+	// .auth.handlers.config ***
+
+	auth1 := config.AuthConfig{
+		Handlers: []config.AuthHandlerConfig{
+			{Config: config.AttributeMap{"key1": "value1"}},
+			{Config: config.AttributeMap{"key2": "value2"}},
+		},
+	}
+	remotes1 := []config.Remote{
+		{
+			Secret: "remsecret1",
+			Auth: config.RemoteAuth{
+				Credentials: &rpc.Credentials{
+					Type:    "remauthtype1",
+					Payload: "payload1",
+				},
+				SignalingCreds: &rpc.Credentials{
+					Type:    "remauthtypesig1",
+					Payload: "payloadsig1",
+				},
+			},
+		},
+		{
+			Secret: "remsecret2",
+			Auth: config.RemoteAuth{
+				Credentials: &rpc.Credentials{
+					Type:    "remauthtype2",
+					Payload: "payload2",
+				},
+				SignalingCreds: &rpc.Credentials{
+					Type:    "remauthtypesig2",
+					Payload: "payloadsig2",
+				},
+			},
+		},
+	}
+
+	left := config.Config{}
+	leftOrig := config.Config{}
+	right := config.Config{
+		Cloud:   cloud1,
+		Auth:    auth1,
+		Remotes: remotes1,
+	}
+	rightOrig := config.Config{
+		Cloud:   cloud1,
+		Auth:    auth1,
+		Remotes: remotes1,
+	}
+
+	diff, err := config.DiffConfigs(left, right, true)
+	test.That(t, err, test.ShouldBeNil)
+
+	// verify secrets did not change
+	test.That(t, left, test.ShouldResemble, leftOrig)
+	test.That(t, right, test.ShouldResemble, rightOrig)
+
+	diffStr := diff.String()
+	test.That(t, diffStr, test.ShouldContainSubstring, cloud1.ID)
+	test.That(t, diffStr, test.ShouldNotContainSubstring, cloud1.Secret)
+	test.That(t, diffStr, test.ShouldNotContainSubstring, cloud1.LocationSecret)
+	test.That(t, diffStr, test.ShouldNotContainSubstring, cloud1.TLSCertificate)
+	test.That(t, diffStr, test.ShouldNotContainSubstring, cloud1.TLSPrivateKey)
+	for _, hdlr := range auth1.Handlers {
+		for _, value := range hdlr.Config {
+			test.That(t, diffStr, test.ShouldNotContainSubstring, value)
+		}
+	}
+	for _, rem := range remotes1 {
+		test.That(t, diffStr, test.ShouldContainSubstring, string(rem.Auth.Credentials.Type))
+		test.That(t, diffStr, test.ShouldNotContainSubstring, rem.Secret)
+		test.That(t, diffStr, test.ShouldNotContainSubstring, rem.Auth.Credentials.Payload)
+		test.That(t, diffStr, test.ShouldNotContainSubstring, rem.Auth.SignalingCreds.Payload)
 	}
 }

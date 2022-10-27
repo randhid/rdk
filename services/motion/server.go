@@ -5,8 +5,8 @@ import (
 	"context"
 
 	"github.com/pkg/errors"
+	pb "go.viam.com/api/service/motion/v1"
 
-	pb "go.viam.com/rdk/proto/api/service/motion/v1"
 	"go.viam.com/rdk/protoutils"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/subtype"
@@ -24,20 +24,20 @@ func NewServer(s subtype.Service) pb.MotionServiceServer {
 	return &subtypeServer{subtypeSvc: s}
 }
 
-func (server *subtypeServer) service() (Service, error) {
-	resource := server.subtypeSvc.Resource(Name.String())
+func (server *subtypeServer) service(serviceName string) (Service, error) {
+	resource := server.subtypeSvc.Resource(serviceName)
 	if resource == nil {
-		return nil, utils.NewResourceNotFoundError(Name)
+		return nil, utils.NewResourceNotFoundError(Named(serviceName))
 	}
 	svc, ok := resource.(Service)
 	if !ok {
-		return nil, utils.NewUnimplementedInterfaceError("motion.Service", resource)
+		return nil, NewUnimplementedInterfaceError(resource)
 	}
 	return svc, nil
 }
 
 func (server *subtypeServer) Move(ctx context.Context, req *pb.MoveRequest) (*pb.MoveResponse, error) {
-	svc, err := server.service()
+	svc, err := server.service(req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -46,15 +46,31 @@ func (server *subtypeServer) Move(ctx context.Context, req *pb.MoveRequest) (*pb
 		protoutils.ResourceNameFromProto(req.GetComponentName()),
 		referenceframe.ProtobufToPoseInFrame(req.GetDestination()),
 		req.GetWorldState(),
+		req.Extra.AsMap(),
 	)
+	return &pb.MoveResponse{Success: success}, err
+}
+
+func (server *subtypeServer) MoveSingleComponent(
+	ctx context.Context,
+	req *pb.MoveSingleComponentRequest,
+) (*pb.MoveSingleComponentResponse, error) {
+	svc, err := server.service(req.Name)
 	if err != nil {
 		return nil, err
 	}
-	return &pb.MoveResponse{Success: success}, nil
+	success, err := svc.MoveSingleComponent(
+		ctx,
+		protoutils.ResourceNameFromProto(req.GetComponentName()),
+		referenceframe.ProtobufToPoseInFrame(req.GetDestination()),
+		req.GetWorldState(),
+		req.Extra.AsMap(),
+	)
+	return &pb.MoveSingleComponentResponse{Success: success}, err
 }
 
 func (server *subtypeServer) GetPose(ctx context.Context, req *pb.GetPoseRequest) (*pb.GetPoseResponse, error) {
-	svc, err := server.service()
+	svc, err := server.service(req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -63,8 +79,10 @@ func (server *subtypeServer) GetPose(ctx context.Context, req *pb.GetPoseRequest
 	}
 
 	pose, err := svc.GetPose(
-		ctx, protoutils.ResourceNameFromProto(req.ComponentName),
+		ctx,
+		protoutils.ResourceNameFromProto(req.ComponentName),
 		req.DestinationFrame, req.GetSupplementalTransforms(),
+		req.Extra.AsMap(),
 	)
 	if err != nil {
 		return nil, err

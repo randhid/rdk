@@ -11,7 +11,7 @@ import (
 type RawDepthColorHomography struct {
 	Homography   []float64 `json:"transform"`
 	DepthToColor bool      `json:"depth_to_color"`
-	RotateDepth  int       `json:"rotate_depth"`
+	RotateDepth  int       `json:"rotate_depth_degs"`
 }
 
 // CheckValid runs checks on the fields of the struct to see if the inputs are valid.
@@ -36,7 +36,7 @@ func (rdch *RawDepthColorHomography) CheckValid() error {
 type DepthColorHomography struct {
 	Homography   *Homography `json:"transform"`
 	DepthToColor bool        `json:"depth_to_color"`
-	RotateDepth  int         `json:"rotate_depth"`
+	RotateDepth  int         `json:"rotate_depth_degs"`
 }
 
 // NewDepthColorHomography takes in a struct that stores raw data from JSON and converts it into a DepthColorHomography struct.
@@ -52,13 +52,15 @@ func NewDepthColorHomography(inp *RawDepthColorHomography) (*DepthColorHomograph
 	}, nil
 }
 
-// AlignColorAndDepthImage will take the depth and the color image and overlay the two properly.
-func (dch *DepthColorHomography) AlignColorAndDepthImage(col *rimage.Image, dep *rimage.DepthMap) (*rimage.ImageWithDepth, error) {
+// AlignColorAndDepthImage will take the depth and the color image and overlay the two properly by transforming
+// the depth map to the color map.
+func (dch *DepthColorHomography) AlignColorAndDepthImage(col *rimage.Image, dep *rimage.DepthMap,
+) (*rimage.Image, *rimage.DepthMap, error) {
 	if col == nil {
-		return nil, errors.New("no color image present to align")
+		return nil, nil, errors.New("no color image present to align")
 	}
 	if dep == nil {
-		return nil, errors.New("no depth image present to align")
+		return nil, nil, errors.New("no depth image present to align")
 	}
 	// rotate depth image if necessary
 	if dch.RotateDepth != 0. {
@@ -73,7 +75,7 @@ func (dch *DepthColorHomography) AlignColorAndDepthImage(col *rimage.Image, dep 
 	if dch.DepthToColor {
 		colorToDepth, err = dch.Homography.Inverse()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	// iterate through color pixels - use the homography to see where they land in the depth map.
@@ -87,5 +89,5 @@ func (dch *DepthColorHomography) AlignColorAndDepthImage(col *rimage.Image, dep 
 			}
 		}
 	}
-	return rimage.MakeImageWithDepth(col, newDepth, true), nil
+	return col, newDepth, nil
 }

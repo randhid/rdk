@@ -7,10 +7,10 @@ package spatialmath
 
 import (
 	"github.com/golang/geo/r3"
+	commonpb "go.viam.com/api/common/v1"
 	"gonum.org/v1/gonum/num/dualquat"
 	"gonum.org/v1/gonum/num/quat"
 
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/utils"
 )
 
@@ -52,31 +52,6 @@ func NewPoseFromOrientation(point r3.Vector, o Orientation) Pose {
 	}
 	q := newDualQuaternion()
 	q.Real = o.Quaternion()
-	q.SetTranslation(point)
-	return q
-}
-
-// NewPoseFromOrientationVector takes in a position and orientation vector and returns a Pose.
-func NewPoseFromOrientationVector(point r3.Vector, ov *OrientationVector) Pose {
-	q := newDualQuaternion()
-	if ov != nil {
-		q = newDualQuaternionFromRotation(ov)
-	}
-	q.SetTranslation(point)
-	return q
-}
-
-// NewPoseFromAxisAngle takes in a position, rotationAxis, and angle and returns a Pose.
-// angle is input in radians.
-func NewPoseFromAxisAngle(point, rotationAxis r3.Vector, angle float64) Pose {
-	emptyVec := r3.Vector{0, 0, 0}
-	if rotationAxis == emptyVec || angle == 0 {
-		return newDualQuaternion()
-	}
-	aa := R4AA{Theta: angle, RX: rotationAxis.X, RY: rotationAxis.Y, RZ: rotationAxis.Z}
-
-	q := newDualQuaternion()
-	q.Real = aa.ToQuat()
 	q.SetTranslation(point)
 	return q
 }
@@ -201,7 +176,7 @@ func (d *distancePose) Point() r3.Vector {
 }
 
 func (d *distancePose) Orientation() Orientation {
-	return (*quaternion)(&d.orientation)
+	return (*Quaternion)(&d.orientation)
 }
 
 // ResetPoseDQTransalation takes a Pose that must be a dualQuaternion and reset's it's translation.

@@ -5,9 +5,11 @@ import (
 	"context"
 	"image/jpeg"
 
+	"go.opencensus.io/trace"
+	commonpb "go.viam.com/api/common/v1"
+	pb "go.viam.com/api/service/slam/v1"
+
 	"go.viam.com/rdk/pointcloud"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	pb "go.viam.com/rdk/proto/api/service/slam/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/subtype"
 	"go.viam.com/rdk/utils"
@@ -24,15 +26,14 @@ func NewServer(s subtype.Service) pb.SLAMServiceServer {
 	return &subtypeServer{subtypeSvc: s}
 }
 
-func (server *subtypeServer) service() (Service, error) {
-	name := Name
-	resource := server.subtypeSvc.Resource(name.String())
+func (server *subtypeServer) service(serviceName string) (Service, error) {
+	resource := server.subtypeSvc.Resource(serviceName)
 	if resource == nil {
-		return nil, utils.NewResourceNotFoundError(name)
+		return nil, utils.NewResourceNotFoundError(Named(serviceName))
 	}
 	svc, ok := resource.(Service)
 	if !ok {
-		return nil, utils.NewUnimplementedInterfaceError("slam.Service", resource)
+		return nil, NewUnimplementedInterfaceError(resource)
 	}
 	return svc, nil
 }
@@ -42,12 +43,15 @@ func (server *subtypeServer) service() (Service, error) {
 func (server *subtypeServer) GetPosition(ctx context.Context, req *pb.GetPositionRequest) (
 	*pb.GetPositionResponse, error,
 ) {
-	svc, err := server.service()
+	ctx, span := trace.StartSpan(ctx, "slam::server::GetPosition")
+	defer span.End()
+
+	svc, err := server.service(req.Name)
 	if err != nil {
 		return nil, err
 	}
 
-	p, err := svc.GetPosition(ctx, req.Name)
+	p, err := svc.Position(ctx, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -63,14 +67,19 @@ func (server *subtypeServer) GetPosition(ctx context.Context, req *pb.GetPositio
 func (server *subtypeServer) GetMap(ctx context.Context, req *pb.GetMapRequest) (
 	*pb.GetMapResponse, error,
 ) {
-	svc, err := server.service()
+	ctx, span := trace.StartSpan(ctx, "slam::server::GetMap")
+	defer span.End()
+
+	svc, err := server.service(req.Name)
 	if err != nil {
 		return nil, err
 	}
 
-	pInFrame := &commonpb.PoseInFrame{Pose: req.CameraPosition}
-	mimeType, imageData, pcData, err := svc.GetMap(ctx, req.Name, req.MimeType,
-		referenceframe.ProtobufToPoseInFrame(pInFrame), req.IncludeRobotMarker)
+	var pInFrame *referenceframe.PoseInFrame
+	if req.CameraPosition != nil {
+		pInFrame = referenceframe.ProtobufToPoseInFrame(&commonpb.PoseInFrame{Pose: req.CameraPosition})
+	}
+	mimeType, imageData, pcData, err := svc.GetMap(ctx, req.Name, req.MimeType, pInFrame, req.IncludeRobotMarker)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +87,9 @@ func (server *subtypeServer) GetMap(ctx context.Context, req *pb.GetMapRequest) 
 	resp := &pb.GetMapResponse{}
 	switch mimeType {
 	case utils.MimeTypeJPEG:
+		_, spanEncode := trace.StartSpan(ctx, "slam::server::GetMap:Encode")
+		defer spanEncode.End()
+
 		var buf bytes.Buffer
 		if err := jpeg.Encode(&buf, imageData, nil); err != nil {
 			return nil, err
@@ -89,11 +101,13 @@ func (server *subtypeServer) GetMap(ctx context.Context, req *pb.GetMapRequest) 
 			Map:      mapData,
 		}
 	case utils.MimeTypePCD:
+		_, spanToPCD := trace.StartSpan(ctx, "slam::server::GetMap:ToPCD")
+		defer spanToPCD.End()
+
 		var buf bytes.Buffer
 		if err := pointcloud.ToPCD(pcData.PointCloud, &buf, pointcloud.PCDBinary); err != nil {
 			return nil, err
 		}
-
 		mapData := &pb.GetMapResponse_PointCloud{PointCloud: &commonpb.PointCloudObject{PointCloud: buf.Bytes()}}
 		resp = &pb.GetMapResponse{
 			MimeType: mimeType,

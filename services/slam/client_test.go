@@ -27,6 +27,11 @@ import (
 	"go.viam.com/rdk/vision"
 )
 
+var (
+	nameSucc = "viam"
+	nameFail = "maiv"
+)
+
 func TestClientWorkingService(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 	listener, err := net.Listen("tcp", "localhost:0")
@@ -35,7 +40,7 @@ func TestClientWorkingService(t *testing.T) {
 	workingServer, err := rpc.NewServer(logger, rpc.WithUnauthenticated())
 	test.That(t, err, test.ShouldBeNil)
 
-	pose := spatial.NewPoseFromOrientationVector(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+	pose := spatial.NewPoseFromOrientation(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
 	pSucc := referenceframe.NewPoseInFrame("frame", pose)
 
 	pcSucc := &vision.Object{}
@@ -47,15 +52,11 @@ func TestClientWorkingService(t *testing.T) {
 
 	workingSLAMService := &inject.SLAMService{}
 
-	workingSLAMService.CloseFunc = func() error {
-		return nil
-	}
-
-	workingSLAMService.GetPositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
+	workingSLAMService.PositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
 		return pSucc, nil
 	}
 
-	workingSLAMService.GetMapFunc = func(ctx context.Context, name string, mimeType string, cp *referenceframe.PoseInFrame,
+	workingSLAMService.GetMapFunc = func(ctx context.Context, name, mimeType string, cp *referenceframe.PoseInFrame,
 		include bool,
 	) (string, image.Image, *vision.Object, error) {
 		if mimeType == utils.MimeTypePCD {
@@ -64,7 +65,7 @@ func TestClientWorkingService(t *testing.T) {
 		return mimeType, imSucc, nil, nil
 	}
 
-	workingSvc, err := subtype.New(map[resource.Name]interface{}{slam.Name: workingSLAMService})
+	workingSvc, err := subtype.New(map[resource.Name]interface{}{slam.Named(nameSucc): workingSLAMService})
 	test.That(t, err, test.ShouldBeNil)
 
 	resourceSubtype := registry.ResourceSubtypeLookup(slam.Subtype)
@@ -72,8 +73,6 @@ func TestClientWorkingService(t *testing.T) {
 
 	go workingServer.Serve(listener)
 	defer workingServer.Stop()
-
-	nameSucc := "viam"
 
 	t.Run("test that context canceled stops client", func(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(context.Background())
@@ -87,9 +86,9 @@ func TestClientWorkingService(t *testing.T) {
 		conn, err := viamgrpc.Dial(context.Background(), listener.Addr().String(), logger)
 		test.That(t, err, test.ShouldBeNil)
 
-		workingSLAMClient := slam.NewClientFromConn(context.Background(), conn, slam.Name.String(), logger)
+		workingSLAMClient := slam.NewClientFromConn(context.Background(), conn, slam.Named(nameSucc).String(), logger)
 		// test get position
-		pInFrame, err := workingSLAMClient.GetPosition(context.Background(), nameSucc)
+		pInFrame, err := workingSLAMClient.Position(context.Background(), nameSucc)
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, pInFrame.FrameName(), test.ShouldEqual, pSucc.FrameName())
 
@@ -106,19 +105,16 @@ func TestClientWorkingService(t *testing.T) {
 		test.That(t, im, test.ShouldNotBeNil)
 		test.That(t, pc.PointCloud, test.ShouldBeNil)
 
-		// test close
-		err = workingSLAMClient.Close()
-		test.That(t, err, test.ShouldBeNil)
 		test.That(t, conn.Close(), test.ShouldBeNil)
 	})
 
 	t.Run("client tests using working GRPC dial connection", func(t *testing.T) {
 		conn, err := viamgrpc.Dial(context.Background(), listener.Addr().String(), logger)
 		test.That(t, err, test.ShouldBeNil)
-		workingDialedClient := slam.NewClientFromConn(context.Background(), conn, "", logger)
+		workingDialedClient := slam.NewClientFromConn(context.Background(), conn, nameSucc, logger)
 
 		// test get position
-		pInFrame, err := workingDialedClient.GetPosition(context.Background(), nameSucc)
+		pInFrame, err := workingDialedClient.Position(context.Background(), nameSucc)
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, pInFrame.FrameName(), test.ShouldEqual, pSucc.FrameName())
 
@@ -129,22 +125,21 @@ func TestClientWorkingService(t *testing.T) {
 		test.That(t, im, test.ShouldBeNil)
 		test.That(t, pc, test.ShouldNotBeNil)
 
-		// test close
-		err = workingDialedClient.Close()
-		test.That(t, err, test.ShouldBeNil)
+		test.That(t, conn.Close(), test.ShouldBeNil)
 	})
 
 	t.Run("client tests using working GRPC dial connection converted to SLAM client", func(t *testing.T) {
 		conn, err := viamgrpc.Dial(context.Background(), listener.Addr().String(), logger)
 		test.That(t, err, test.ShouldBeNil)
-		dialedClient := resourceSubtype.RPCClient(context.Background(), conn, "", logger)
+		dialedClient := resourceSubtype.RPCClient(context.Background(), conn, nameSucc, logger)
 		workingDialedClient, ok := dialedClient.(slam.Service)
 		test.That(t, ok, test.ShouldBeTrue)
 
 		// test get position
-		p, err := workingDialedClient.GetPosition(context.Background(), nameSucc)
+		p, err := workingDialedClient.Position(context.Background(), nameSucc)
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, p.FrameName(), test.ShouldEqual, pSucc.FrameName())
+		test.That(t, conn.Close(), test.ShouldBeNil)
 	})
 }
 
@@ -156,7 +151,7 @@ func TestClientFailingService(t *testing.T) {
 	failingServer, err := rpc.NewServer(logger, rpc.WithUnauthenticated())
 	test.That(t, err, test.ShouldBeNil)
 
-	pose := spatial.NewPoseFromOrientationVector(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+	pose := spatial.NewPoseFromOrientation(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
 	pFail := referenceframe.NewPoseInFrame("frame", pose)
 	pcFail := &vision.Object{}
 	pcFail.PointCloud = pointcloud.New()
@@ -166,21 +161,17 @@ func TestClientFailingService(t *testing.T) {
 
 	failingSLAMService := &inject.SLAMService{}
 
-	failingSLAMService.CloseFunc = func() error {
-		return errors.New("failure to close")
-	}
-
-	failingSLAMService.GetPositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
+	failingSLAMService.PositionFunc = func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
 		return pFail, errors.New("failure to get position")
 	}
 
-	failingSLAMService.GetMapFunc = func(ctx context.Context, name string, mimeType string, cp *referenceframe.PoseInFrame,
+	failingSLAMService.GetMapFunc = func(ctx context.Context, name, mimeType string, cp *referenceframe.PoseInFrame,
 		include bool,
 	) (string, image.Image, *vision.Object, error) {
 		return mimeType, imFail, pcFail, errors.New("failure to get map")
 	}
 
-	failingSvc, err := subtype.New(map[resource.Name]interface{}{slam.Name: failingSLAMService})
+	failingSvc, err := subtype.New(map[resource.Name]interface{}{slam.Named(nameSucc): failingSLAMService})
 	test.That(t, err, test.ShouldBeNil)
 
 	resourceSubtype := registry.ResourceSubtypeLookup(slam.Subtype)
@@ -189,17 +180,15 @@ func TestClientFailingService(t *testing.T) {
 	go failingServer.Serve(listener)
 	defer failingServer.Stop()
 
-	nameFail := "maiv"
-
 	t.Run("client test using bad SLAM client connection", func(t *testing.T) {
 		conn, err := viamgrpc.Dial(context.Background(), listener.Addr().String(), logger)
 		test.That(t, err, test.ShouldBeNil)
 
-		failingSLAMClient := slam.NewClientFromConn(context.Background(), conn, slam.Name.String(), logger)
+		failingSLAMClient := slam.NewClientFromConn(context.Background(), conn, slam.Named(nameSucc).String(), logger)
 		test.That(t, err, test.ShouldBeNil)
 
 		// test get position
-		p, err := failingSLAMClient.GetPosition(context.Background(), nameFail)
+		p, err := failingSLAMClient.Position(context.Background(), nameFail)
 		test.That(t, err, test.ShouldNotBeNil)
 		test.That(t, p, test.ShouldBeNil)
 
@@ -210,9 +199,6 @@ func TestClientFailingService(t *testing.T) {
 		test.That(t, im, test.ShouldBeNil)
 		test.That(t, pc.PointCloud, test.ShouldBeNil)
 
-		// test close
-		err = failingSLAMClient.Close()
-		test.That(t, err, test.ShouldBeNil)
 		test.That(t, conn.Close(), test.ShouldBeNil)
 	})
 }

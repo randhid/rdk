@@ -1,72 +1,70 @@
-package datamanager
+package datamanager_test
 
 import (
 	"context"
-	"io/ioutil"
 	"testing"
-	"time"
 
-	"github.com/edaniels/golog"
 	"go.viam.com/test"
 
-	"go.viam.com/rdk/component/arm"
-	"go.viam.com/rdk/config"
-	"go.viam.com/rdk/data"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	"go.viam.com/rdk/resource"
-	"go.viam.com/rdk/testutils/inject"
-	"go.viam.com/rdk/utils"
+	"go.viam.com/rdk/registry"
+	"go.viam.com/rdk/services/datamanager"
+	rutils "go.viam.com/rdk/utils"
 )
 
-func TestNewDataManager(t *testing.T) {
-	// Empty config at initialization.
-	cfgService := config.Service{
-		Type:                "data_manager",
-		ConvertedAttributes: &Config{},
-	}
-	logger := golog.NewTestLogger(t)
-	r := &inject.Robot{}
-	const arm1Key = "arm1"
-	arm1 := &inject.Arm{}
-	arm1.GetEndPositionFunc = func(ctx context.Context) (*commonpb.Pose, error) {
-		return &commonpb.Pose{X: 1, Y: 2, Z: 3}, nil
-	}
-	rs := map[resource.Name]interface{}{arm.Named(arm1Key): arm1}
-	r.MockResourcesFromMap(rs)
+var (
+	testSvcName1 = "svc1"
+	testSvcName2 = "svc2"
+)
 
-	// Check that the service has started.
-	dataManager, err := New(context.Background(), r, cfgService, logger)
-	svc := dataManager.(*Service)
+func TestRegisteredReconfigurable(t *testing.T) {
+	s := registry.ResourceSubtypeLookup(datamanager.Subtype)
+	test.That(t, s, test.ShouldNotBeNil)
+	r := s.Reconfigurable
+	test.That(t, r, test.ShouldNotBeNil)
+}
+
+func TestWrapWithReconfigurable(t *testing.T) {
+	svc := &mock{name: testSvcName1}
+	reconfSvc1, err := datamanager.WrapWithReconfigurable(svc)
 	test.That(t, err, test.ShouldBeNil)
 
-	// Set capture parameters in Update.
-	conf, err := config.Read(
-		context.Background(), utils.ResolveFile("robots/configs/fake_robot_with_data_manager.json"), logger)
-	test.That(t, err, test.ShouldBeNil)
-	svcConfig, ok, err := getServiceConfig(conf)
-	test.That(t, ok, test.ShouldBeTrue)
-	test.That(t, err, test.ShouldBeNil)
+	_, err = datamanager.WrapWithReconfigurable(nil)
+	test.That(t, err, test.ShouldBeError, datamanager.NewUnimplementedInterfaceError(nil))
 
-	svc.Update(context.Background(), conf)
-	sleepTime := time.Millisecond * 5
-	time.Sleep(sleepTime)
-
-	// Check that the expected collector is running.
-	test.That(t, len(svc.collectors), test.ShouldEqual, 1)
-	expectedComponentMethodMetadata := componentMethodMetadata{
-		"arm1", data.MethodMetadata{Subtype: resource.SubtypeName("arm"), MethodName: "GetEndPosition"},
-	}
-	_, present := svc.collectors[expectedComponentMethodMetadata]
-	test.That(t, present, test.ShouldBeTrue)
-
-	// Check that collector is closed.
-	err = svc.Close(context.Background())
+	reconfSvc2, err := datamanager.WrapWithReconfigurable(reconfSvc1)
 	test.That(t, err, test.ShouldBeNil)
-	time.Sleep(sleepTime)
-	test.That(t, svc.collectors, test.ShouldBeEmpty)
+	test.That(t, reconfSvc2, test.ShouldEqual, reconfSvc1)
+}
 
-	// Check that the collector wrote to a single file.
-	files, err := ioutil.ReadDir(svcConfig.CaptureDir)
+func TestReconfigurable(t *testing.T) {
+	actualSvc1 := &mock{name: testSvcName1}
+	reconfSvc1, err := datamanager.WrapWithReconfigurable(actualSvc1)
 	test.That(t, err, test.ShouldBeNil)
-	test.That(t, len(files), test.ShouldEqual, 1)
+	test.That(t, reconfSvc1, test.ShouldNotBeNil)
+
+	actualArm2 := &mock{name: testSvcName2}
+	reconfSvc2, err := datamanager.WrapWithReconfigurable(actualArm2)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, reconfSvc2, test.ShouldNotBeNil)
+	test.That(t, actualSvc1.reconfCount, test.ShouldEqual, 0)
+
+	err = reconfSvc1.Reconfigure(context.Background(), reconfSvc2)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, reconfSvc1, test.ShouldResemble, reconfSvc2)
+	test.That(t, actualSvc1.reconfCount, test.ShouldEqual, 1)
+
+	err = reconfSvc1.Reconfigure(context.Background(), nil)
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err, test.ShouldBeError, rutils.NewUnexpectedTypeError(reconfSvc1, nil))
+}
+
+type mock struct {
+	datamanager.Service
+	name        string
+	reconfCount int
+}
+
+func (m *mock) Close(_ context.Context) error {
+	m.reconfCount++
+	return nil
 }

@@ -3,24 +3,18 @@ package motion
 
 import (
 	"context"
-	"fmt"
+	"sync"
 
 	"github.com/edaniels/golog"
-	"github.com/golang/geo/r3"
-	"github.com/pkg/errors"
+	commonpb "go.viam.com/api/common/v1"
+	servicepb "go.viam.com/api/service/motion/v1"
+	goutils "go.viam.com/utils"
 	"go.viam.com/utils/rpc"
 
-	"go.viam.com/rdk/config"
-	"go.viam.com/rdk/motionplan"
-	"go.viam.com/rdk/operation"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	servicepb "go.viam.com/rdk/proto/api/service/motion/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
-	"go.viam.com/rdk/robot/framesystem"
-	"go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/subtype"
 	"go.viam.com/rdk/utils"
 )
@@ -39,11 +33,7 @@ func init() {
 		RPCClient: func(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) interface{} {
 			return NewClientFromConn(ctx, conn, name, logger)
 		},
-	})
-	registry.RegisterService(Subtype, registry.Service{
-		Constructor: func(ctx context.Context, r robot.Robot, c config.Service, logger golog.Logger) (interface{}, error) {
-			return New(ctx, r, c, logger)
-		},
+		Reconfigurable: WrapWithReconfigurable,
 	})
 }
 
@@ -54,14 +44,29 @@ type Service interface {
 		componentName resource.Name,
 		destination *referenceframe.PoseInFrame,
 		worldState *commonpb.WorldState,
+		extra map[string]interface{},
+	) (bool, error)
+	MoveSingleComponent(
+		ctx context.Context,
+		componentName resource.Name,
+		destination *referenceframe.PoseInFrame,
+		worldState *commonpb.WorldState,
+		extra map[string]interface{},
 	) (bool, error)
 	GetPose(
 		ctx context.Context,
 		componentName resource.Name,
 		destinationFrame string,
 		supplementalTransforms []*commonpb.Transform,
+		extra map[string]interface{},
 	) (*referenceframe.PoseInFrame, error)
 }
+
+var (
+	_ = Service(&reconfigurableMotionService{})
+	_ = resource.Reconfigurable(&reconfigurableMotionService{})
+	_ = goutils.ContextCloser(&reconfigurableMotionService{})
+)
 
 // SubtypeName is the name of the type of service.
 const SubtypeName = resource.SubtypeName("motion")
@@ -73,137 +78,101 @@ var Subtype = resource.NewSubtype(
 	SubtypeName,
 )
 
-// Name is the MotionService's typed resource name.
-var Name = resource.NameFromSubtype(Subtype, "")
+// Named is a helper for getting the named motion service's typed resource name.
+func Named(name string) resource.Name {
+	return resource.NameFromSubtype(Subtype, name)
+}
 
-// FromRobot retrieves the motion service of a robot.
-func FromRobot(r robot.Robot) (Service, error) {
-	resource, err := r.ResourceByName(Name)
+// NewUnimplementedInterfaceError is used when there is a failed interface check.
+func NewUnimplementedInterfaceError(actual interface{}) error {
+	return utils.NewUnimplementedInterfaceError((Service)(nil), actual)
+}
+
+// FromRobot is a helper for getting the named motion service from the given Robot.
+func FromRobot(r robot.Robot, name string) (Service, error) {
+	resource, err := r.ResourceByName(Named(name))
 	if err != nil {
 		return nil, err
 	}
 	svc, ok := resource.(Service)
 	if !ok {
-		return nil, utils.NewUnimplementedInterfaceError("motion.Service", resource)
+		return nil, NewUnimplementedInterfaceError(resource)
 	}
 	return svc, nil
 }
 
-// New returns a new move and grab service for the given robot.
-func New(ctx context.Context, r robot.Robot, config config.Service, logger golog.Logger) (Service, error) {
-	return &motionService{
-		r:      r,
-		logger: logger,
-	}, nil
+type reconfigurableMotionService struct {
+	mu     sync.RWMutex
+	actual Service
 }
 
-type motionService struct {
-	r      robot.Robot
-	logger golog.Logger
-}
-
-// Move takes a goal location and moves a component specified by its name to that destination.
-func (ms *motionService) Move(
+func (svc *reconfigurableMotionService) Move(
 	ctx context.Context,
 	componentName resource.Name,
 	destination *referenceframe.PoseInFrame,
 	worldState *commonpb.WorldState,
+	extra map[string]interface{},
 ) (bool, error) {
-	operation.CancelOtherWithLabel(ctx, "motion-service")
-	logger := ms.r.Logger()
-
-	// get goal frame
-	goalFrameName := destination.FrameName()
-	if goalFrameName == componentName.Name {
-		return false, errors.New("cannot move component with respect to its own frame, will always be at its own origin")
-	}
-	logger.Debugf("goal given in frame of %q", goalFrameName)
-
-	frameSys, err := framesystem.RobotFrameSystem(ctx, ms.r, worldState.GetTransforms())
-	if err != nil {
-		return false, err
-	}
-	solver := motionplan.NewSolvableFrameSystem(frameSys, logger)
-
-	// get the initial inputs
-	input := referenceframe.StartPositions(solver)
-
-	// build maps of relevant components and inputs from initial inputs
-	allOriginals := map[string][]referenceframe.Input{}
-	resources := map[string]referenceframe.InputEnabled{}
-	for name, original := range input {
-		// skip frames with no input
-		if len(original) == 0 {
-			continue
-		}
-
-		// add component to map
-		allOriginals[name] = original
-		components := robot.AllResourcesByName(ms.r, name)
-		if len(components) != 1 {
-			return false, fmt.Errorf("got %d resources instead of 1 for (%s)", len(components), name)
-		}
-		component, ok := components[0].(referenceframe.InputEnabled)
-		if !ok {
-			return false, fmt.Errorf("%v(%T) is not InputEnabled", name, components[0])
-		}
-		resources[name] = component
-
-		// add input to map
-		pos, err := component.CurrentInputs(ctx)
-		if err != nil {
-			return false, err
-		}
-		input[name] = pos
-	}
-	logger.Debugf("frame system inputs: %v", input)
-
-	// re-evaluate goalPose to be in the frame we're going to move in
-	solvingFrame := referenceframe.World // TODO(erh): this should really be the parent of rootName
-	goalPose, err := solver.TransformPose(input, destination.Pose(), goalFrameName, solvingFrame)
-	if err != nil {
-		return false, err
-	}
-
-	// the goal is to move the component to goalPose which is specified in coordinates of goalFrameName
-	_ = worldState // TODO(rb) incorporate obstacles into motion planning
-	output, err := solver.SolvePose(ctx, input, goalPose.Pose(), componentName.Name, solvingFrame)
-	if err != nil {
-		return false, err
-	}
-
-	// move all the components
-	for _, step := range output {
-		// TODO(erh): what order? parallel?
-		for name, inputs := range step {
-			if len(inputs) == 0 {
-				continue
-			}
-			err := resources[name].GoToInputs(ctx, inputs)
-			if err != nil {
-				return false, err
-			}
-		}
-	}
-	return true, nil
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	return svc.actual.Move(ctx, componentName, destination, worldState, extra)
 }
 
-func (ms *motionService) GetPose(
+func (svc *reconfigurableMotionService) MoveSingleComponent(
+	ctx context.Context,
+	componentName resource.Name,
+	destination *referenceframe.PoseInFrame,
+	worldState *commonpb.WorldState,
+	extra map[string]interface{},
+) (bool, error) {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	return svc.actual.MoveSingleComponent(ctx, componentName, destination, worldState, extra)
+}
+
+func (svc *reconfigurableMotionService) GetPose(
 	ctx context.Context,
 	componentName resource.Name,
 	destinationFrame string,
 	supplementalTransforms []*commonpb.Transform,
+	extra map[string]interface{},
 ) (*referenceframe.PoseInFrame, error) {
-	if destinationFrame == "" {
-		destinationFrame = referenceframe.World
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	return svc.actual.GetPose(ctx, componentName, destinationFrame, supplementalTransforms, extra)
+}
+
+func (svc *reconfigurableMotionService) Close(ctx context.Context) error {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	return goutils.TryClose(ctx, svc.actual)
+}
+
+// Reconfigure replaces the old Motion Service with a new Motion Service.
+func (svc *reconfigurableMotionService) Reconfigure(ctx context.Context, newSvc resource.Reconfigurable) error {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	rSvc, ok := newSvc.(*reconfigurableMotionService)
+	if !ok {
+		return utils.NewUnexpectedTypeError(svc, newSvc)
 	}
-	return ms.r.TransformPose(
-		ctx,
-		referenceframe.NewPoseInFrame(
-			componentName.Name,
-			spatialmath.NewPoseFromPoint(r3.Vector{0, 0, 0}),
-		),
-		destinationFrame,
-		supplementalTransforms,
-	)
+	if err := goutils.TryClose(ctx, svc.actual); err != nil {
+		golog.Global().Errorw("error closing old", "error", err)
+	}
+	svc.actual = rSvc.actual
+	return nil
+}
+
+// WrapWithReconfigurable wraps a Motion Service as a Reconfigurable.
+func WrapWithReconfigurable(s interface{}) (resource.Reconfigurable, error) {
+	svc, ok := s.(Service)
+	if !ok {
+		return nil, NewUnimplementedInterfaceError(s)
+	}
+
+	if reconfigurable, ok := s.(*reconfigurableMotionService); ok {
+		return reconfigurable, nil
+	}
+
+	return &reconfigurableMotionService{actual: svc}, nil
 }

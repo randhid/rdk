@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"go.uber.org/multierr"
+	pb "go.viam.com/api/component/arm/v1"
 
 	"go.viam.com/rdk/spatialmath"
 )
@@ -26,19 +27,19 @@ type Model interface {
 
 // SimpleModel TODO.
 type SimpleModel struct {
-	name string // the name of the model
+	*baseFrame
 	// OrdTransforms is the list of transforms ordered from end effector to base
 	OrdTransforms []Frame
 	poseCache     *sync.Map
-	limits        []Limit
 	lock          sync.RWMutex
 }
 
 // NewSimpleModel constructs a new model.
-func NewSimpleModel() *SimpleModel {
-	m := &SimpleModel{}
-	m.poseCache = &sync.Map{}
-	return m
+func NewSimpleModel(name string) *SimpleModel {
+	return &SimpleModel{
+		baseFrame: &baseFrame{name: name},
+		poseCache: &sync.Map{},
+	}
 }
 
 // GenerateRandomConfiguration generates a list of radian joint positions that are random but valid for each joint.
@@ -56,11 +57,6 @@ func GenerateRandomConfiguration(m Model, randSeed *rand.Rand) []float64 {
 	return jointPos
 }
 
-// Name returns the name of this model.
-func (m *SimpleModel) Name() string {
-	return m.name
-}
-
 // ChangeName changes the name of this model - necessary for building frame systems.
 func (m *SimpleModel) ChangeName(name string) {
 	m.name = name
@@ -76,8 +72,36 @@ func (m *SimpleModel) Transform(inputs []Input) (spatialmath.Pose, error) {
 	return frames[0].transform, err
 }
 
+// InputFromProtobuf converts pb.JointPosition to inputs.
+func (m *SimpleModel) InputFromProtobuf(jp *pb.JointPositions) []Input {
+	inputs := make([]Input, 0, len(jp.Values))
+	posIdx := 0
+	for _, transform := range m.OrdTransforms {
+		dof := len(transform.DoF()) + posIdx
+		jPos := jp.Values[posIdx:dof]
+		posIdx = dof
+
+		inputs = append(inputs, transform.InputFromProtobuf(&pb.JointPositions{Values: jPos})...)
+	}
+
+	return inputs
+}
+
+// ProtobufFromInput converts inputs to pb.JointPosition.
+func (m *SimpleModel) ProtobufFromInput(input []Input) *pb.JointPositions {
+	jPos := &pb.JointPositions{}
+	posIdx := 0
+	for _, transform := range m.OrdTransforms {
+		dof := len(transform.DoF()) + posIdx
+		jPos.Values = append(jPos.Values, transform.ProtobufFromInput(input[posIdx:dof]).Values...)
+		posIdx = dof
+	}
+
+	return jPos
+}
+
 // Geometries returns an object representing the 3D space associeted with the staticFrame.
-func (m *SimpleModel) Geometries(inputs []Input) (map[string]spatialmath.Geometry, error) {
+func (m *SimpleModel) Geometries(inputs []Input) (*GeometriesInFrame, error) {
 	frames, err := m.inputsToFrames(inputs, true)
 	if err != nil && frames == nil {
 		return nil, err
@@ -91,9 +115,9 @@ func (m *SimpleModel) Geometries(inputs []Input) (map[string]spatialmath.Geometr
 			multierr.AppendInto(&errAll, err)
 			continue
 		}
-		geometryMap[m.name+":"+frame.Name()] = geometry[frame.Name()]
+		geometryMap[m.name+":"+frame.Name()] = geometry.Geometries()[frame.Name()].Transform(frame.transform)
 	}
-	return geometryMap, errAll
+	return NewGeometriesInFrame(m.name, geometryMap), errAll
 }
 
 // CachedTransform will check a sync.Map cache to see if the exact given set of inputs has been computed yet. If so
@@ -113,22 +137,6 @@ func (m *SimpleModel) CachedTransform(inputs []Input) (spatialmath.Pose, error) 
 	m.poseCache.Store(key, poses[len(poses)-1].transform)
 
 	return poses[len(poses)-1].transform, err
-}
-
-// IsConfigurationValid checks whether the given array of joint positions violates any joint limits.
-func IsConfigurationValid(m Model, configuration []float64) bool {
-	limits := m.DoF()
-	for i := 0; i < len(limits); i++ {
-		if configuration[i] < limits[i].Min || configuration[i] > limits[i].Max {
-			return false
-		}
-	}
-	return true
-}
-
-// OperationalDoF returns the number of end effectors. Currently we only support one end effector but will support more.
-func (m *SimpleModel) OperationalDoF() int {
-	return 1
 }
 
 // DoF returns the number of degrees of freedom within a model.
@@ -189,6 +197,9 @@ func (m *SimpleModel) AlmostEquals(otherFrame Frame) bool {
 // cartesian position of each of the links up to and including the end effector. This is useful for when conversions
 // between quaternions and OV are not needed.
 func (m *SimpleModel) inputsToFrames(inputs []Input, collectAll bool) ([]*staticFrame, error) {
+	if len(m.DoF()) != len(inputs) {
+		return nil, NewIncorrectInputLengthError(len(inputs), len(m.limits))
+	}
 	var err error
 	poses := make([]*staticFrame, 0, len(m.OrdTransforms))
 	// Start at ((1+0i+0j+0k)+(+0+0i+0j+0k)ϵ)
@@ -216,7 +227,7 @@ func (m *SimpleModel) inputsToFrames(inputs []Input, collectAll bool) ([]*static
 		composedTransformation = spatialmath.Compose(composedTransformation, pose)
 	}
 	// TODO(rb) as written this will return one too many frames, no need to return zeroth frame
-	poses = append(poses, &staticFrame{"", composedTransformation, nil})
+	poses = append(poses, &staticFrame{&baseFrame{"", []Limit{}}, composedTransformation, nil})
 	return poses, err
 }
 

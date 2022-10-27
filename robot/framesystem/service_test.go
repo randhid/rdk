@@ -2,29 +2,29 @@ package framesystem_test
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"testing"
 
 	"github.com/edaniels/golog"
 	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
-	"go.viam.com/test"
-	"go.viam.com/utils"
-
-	"go.viam.com/rdk/component/base"
-	"go.viam.com/rdk/component/gripper"
 	// register.
-	_ "go.viam.com/rdk/component/register"
+	commonpb "go.viam.com/api/common/v1"
+	"go.viam.com/test"
+
+	"go.viam.com/rdk/components/base"
+	"go.viam.com/rdk/components/gripper"
+	_ "go.viam.com/rdk/components/register"
 	"go.viam.com/rdk/config"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	framesystemparts "go.viam.com/rdk/robot/framesystem/parts"
 	robotimpl "go.viam.com/rdk/robot/impl"
-	weboptions "go.viam.com/rdk/robot/web/options"
+	_ "go.viam.com/rdk/services/register"
 	"go.viam.com/rdk/spatialmath"
+	"go.viam.com/rdk/testutils/inject"
+	"go.viam.com/rdk/testutils/robottestutils"
 	rdkutils "go.viam.com/rdk/utils"
 )
 
@@ -42,10 +42,9 @@ func TestFrameSystemFromConfig(t *testing.T) {
 	defer r.Close(context.Background())
 
 	// use fake registrations to have a FrameSystem return
-	testPose := spatialmath.NewPoseFromAxisAngle(
+	testPose := spatialmath.NewPoseFromOrientation(
 		r3.Vector{X: 1., Y: 2., Z: 3.},
-		r3.Vector{X: 0., Y: 1., Z: 0.},
-		math.Pi/2,
+		&spatialmath.R4AA{Theta: math.Pi / 2, RX: 0., RY: 1., RZ: 0.},
 	)
 
 	transformMsgs := []*commonpb.Transform{
@@ -91,85 +90,91 @@ func TestFrameSystemFromConfig(t *testing.T) {
 	test.That(t, len(fs.FrameNames()), test.ShouldEqual, 18)
 
 	// see if all frames are present and if their frames are correct
-	test.That(t, fs.GetFrame("world"), test.ShouldNotBeNil)
+	test.That(t, fs.Frame("world"), test.ShouldNotBeNil)
 
 	t.Log("pieceArm")
-	test.That(t, fs.GetFrame("pieceArm"), test.ShouldNotBeNil)
-	pose, err := fs.GetFrame("pieceArm").Transform(emptyIn)
+	test.That(t, fs.Frame("pieceArm"), test.ShouldNotBeNil)
+	pose, err := fs.Frame("pieceArm").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{500, 0, 300})
 
-	t.Log("pieceArm_offset")
-	test.That(t, fs.GetFrame("pieceArm_offset"), test.ShouldNotBeNil)
-	pose, err = fs.GetFrame("pieceArm_offset").Transform(emptyIn)
+	t.Log("pieceArm_origin")
+	test.That(t, fs.Frame("pieceArm_origin"), test.ShouldNotBeNil)
+	pose, err = fs.Frame("pieceArm_origin").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{500, 500, 1000})
 
 	t.Log("pieceGripper")
-	test.That(t, fs.GetFrame("pieceGripper"), test.ShouldNotBeNil)
-	pose, err = fs.GetFrame("pieceGripper").Transform(emptyIn)
+	test.That(t, fs.Frame("pieceGripper"), test.ShouldNotBeNil)
+	pose, err = fs.Frame("pieceGripper").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{0, 0, 200})
 
-	t.Log("pieceGripper_offset")
-	test.That(t, fs.GetFrame("pieceGripper_offset"), test.ShouldNotBeNil)
-	pose, err = fs.GetFrame("pieceGripper_offset").Transform(emptyIn)
+	t.Log("pieceGripper_origin")
+	test.That(t, fs.Frame("pieceGripper_origin"), test.ShouldNotBeNil)
+	pose, err = fs.Frame("pieceGripper_origin").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{0, 0, 0})
 
-	t.Log("gps2")
-	test.That(t, fs.GetFrame("gps2"), test.ShouldNotBeNil)
-	pose, err = fs.GetFrame("gps2").Transform(emptyIn)
+	t.Log("movement_sensor2")
+	test.That(t, fs.Frame("movement_sensor2"), test.ShouldNotBeNil)
+	pose, err = fs.Frame("movement_sensor2").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{0, 0, 0})
 
-	t.Log("gps2_offset")
-	test.That(t, fs.GetFrame("gps2_offset"), test.ShouldNotBeNil)
-	pose, err = fs.GetFrame("gps2_offset").Transform(emptyIn)
+	t.Log("movement_sensor2_origin")
+	test.That(t, fs.Frame("movement_sensor2_origin"), test.ShouldNotBeNil)
+	pose, err = fs.Frame("movement_sensor2_origin").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{0, 0, 0})
 
 	t.Log("cameraOver")
-	test.That(t, fs.GetFrame("cameraOver"), test.ShouldNotBeNil)
-	pose, err = fs.GetFrame("cameraOver").Transform(emptyIn)
+	test.That(t, fs.Frame("cameraOver"), test.ShouldNotBeNil)
+	pose, err = fs.Frame("cameraOver").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{0, 0, 0})
 
-	t.Log("cameraOver_offset")
-	test.That(t, fs.GetFrame("cameraOver_offset"), test.ShouldNotBeNil)
-	pose, err = fs.GetFrame("cameraOver_offset").Transform(emptyIn)
+	t.Log("cameraOver_origin")
+	test.That(t, fs.Frame("cameraOver_origin"), test.ShouldNotBeNil)
+	pose, err = fs.Frame("cameraOver_origin").Transform(emptyIn)
 	test.That(t, err, test.ShouldBeNil)
 	pointAlmostEqual(t, pose.Point(), r3.Vector{2000, 500, 1300})
 
-	t.Log("gps1")
-	test.That(t, fs.GetFrame("gps1"), test.ShouldBeNil) // gps1 is not registered
+	t.Log("movement_sensor1")
+	test.That(t, fs.Frame("movement_sensor1"), test.ShouldBeNil) // movement_sensor1 is not registered
 
 	// There is a point at (1500, 500, 1300) in the world referenceframe. See if it transforms correctly in each referenceframe.
-	worldPt := r3.Vector{1500, 500, 1300}
+	worldPose := referenceframe.NewPoseInFrame(referenceframe.World, spatialmath.NewPoseFromPoint(r3.Vector{1500, 500, 1300}))
 	armPt := r3.Vector{0, 0, 500}
-	transformPoint, err := fs.TransformPoint(blankPos, worldPt, referenceframe.World, "pieceArm")
+	tf, err := fs.Transform(blankPos, worldPose, "pieceArm")
 	test.That(t, err, test.ShouldBeNil)
-	pointAlmostEqual(t, transformPoint, armPt)
+	transformPose, _ := tf.(*referenceframe.PoseInFrame)
+	pointAlmostEqual(t, transformPose.Pose().Point(), armPt)
 
 	sensorPt := r3.Vector{0, 0, 500}
-	transformPoint, err = fs.TransformPoint(blankPos, worldPt, referenceframe.World, "gps2")
+	tf, err = fs.Transform(blankPos, worldPose, "movement_sensor2")
 	test.That(t, err, test.ShouldBeNil)
-	pointAlmostEqual(t, transformPoint, sensorPt)
+	transformPose, _ = tf.(*referenceframe.PoseInFrame)
+	pointAlmostEqual(t, transformPose.Pose().Point(), sensorPt)
 
 	gripperPt := r3.Vector{0, 0, 300}
-	transformPoint, err = fs.TransformPoint(blankPos, worldPt, referenceframe.World, "pieceGripper")
+	tf, err = fs.Transform(blankPos, worldPose, "pieceGripper")
 	test.That(t, err, test.ShouldBeNil)
-	pointAlmostEqual(t, transformPoint, gripperPt)
+	transformPose, _ = tf.(*referenceframe.PoseInFrame)
+	pointAlmostEqual(t, transformPose.Pose().Point(), gripperPt)
 
 	cameraPt := r3.Vector{500, 0, 0}
-	transformPoint, err = fs.TransformPoint(blankPos, worldPt, referenceframe.World, "cameraOver")
+	tf, err = fs.Transform(blankPos, worldPose, "cameraOver")
 	test.That(t, err, test.ShouldBeNil)
-	pointAlmostEqual(t, transformPoint, cameraPt)
+	transformPose, _ = tf.(*referenceframe.PoseInFrame)
+	pointAlmostEqual(t, transformPose.Pose().Point(), cameraPt)
 
 	// go from camera point to gripper point
-	transformPoint, err = fs.TransformPoint(blankPos, cameraPt, "cameraOver", "pieceGripper")
+	cameraPose := referenceframe.NewPoseInFrame("cameraOver", spatialmath.NewPoseFromPoint(cameraPt))
+	tf, err = fs.Transform(blankPos, cameraPose, "pieceGripper")
 	test.That(t, err, test.ShouldBeNil)
-	pointAlmostEqual(t, transformPoint, gripperPt)
+	transformPose, _ = tf.(*referenceframe.PoseInFrame)
+	pointAlmostEqual(t, transformPose.Pose().Point(), gripperPt)
 }
 
 // All of these config files should fail.
@@ -178,7 +183,26 @@ func TestWrongFrameSystems(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 	cfg, err := config.Read(context.Background(), rdkutils.ResolveFile("robot/impl/data/fake_wrongconfig2.json"), logger) // no world node
 	test.That(t, err, test.ShouldBeNil)
-	_, err = robotimpl.New(context.Background(), cfg, logger)
+
+	injectRobot := &inject.Robot{}
+	injectRobot.ConfigFunc = func(ctx context.Context) (*config.Config, error) {
+		return cfg, nil
+	}
+
+	injectRobot.ResourceByNameFunc = func(name resource.Name) (interface{}, error) {
+		return struct{}{}, nil
+	}
+
+	injectRobot.RemoteNamesFunc = func() []string {
+		return []string{}
+	}
+
+	var resources map[resource.Name]interface{}
+	ctx := context.Background()
+	service := framesystem.New(ctx, injectRobot, logger)
+	serviceUpdateable, ok := service.(resource.Updateable)
+	test.That(t, ok, test.ShouldBeTrue)
+	err = serviceUpdateable.Update(ctx, resources)
 	test.That(t, err, test.ShouldBeError, framesystemparts.NewMissingParentError("pieceArm", "base"))
 	cfg, err = config.Read(
 		context.Background(),
@@ -186,7 +210,11 @@ func TestWrongFrameSystems(t *testing.T) {
 		logger,
 	) // one of the nodes was given the name world
 	test.That(t, err, test.ShouldBeNil)
-	_, err = robotimpl.New(context.Background(), cfg, logger)
+
+	injectRobot.ConfigFunc = func(ctx context.Context) (*config.Config, error) {
+		return cfg, nil
+	}
+	err = serviceUpdateable.Update(ctx, resources)
 	test.That(t, err, test.ShouldBeError, errors.Errorf("cannot give frame system part the name %s", referenceframe.World))
 
 	cfg, err = config.Read(
@@ -195,13 +223,16 @@ func TestWrongFrameSystems(t *testing.T) {
 		logger,
 	) // the parent field was left empty for a component
 	test.That(t, err, test.ShouldBeNil)
-	_, err = robotimpl.New(context.Background(), cfg, logger)
+
+	injectRobot.ConfigFunc = func(ctx context.Context) (*config.Config, error) {
+		return cfg, nil
+	}
+	err = serviceUpdateable.Update(ctx, resources)
 	test.That(t, err, test.ShouldBeError, errors.New("parent field in frame config for part \"cameraOver\" is empty"))
 
-	testPose := spatialmath.NewPoseFromAxisAngle(
+	testPose := spatialmath.NewPoseFromOrientation(
 		r3.Vector{X: 1., Y: 2., Z: 3.},
-		r3.Vector{X: 0., Y: 1., Z: 0.},
-		math.Pi/2,
+		&spatialmath.R4AA{Theta: math.Pi / 2, RX: 0., RY: 1., RZ: 0.},
 	)
 
 	transformMsgs := []*commonpb.Transform{
@@ -255,13 +286,10 @@ func TestServiceWithRemote(t *testing.T) {
 	defer func() {
 		test.That(t, remoteRobot.Close(context.Background()), test.ShouldBeNil)
 	}()
-	port, err := utils.TryReserveRandomPort()
-	test.That(t, err, test.ShouldBeNil)
-	options := weboptions.New()
-	options.Network.BindAddress = fmt.Sprintf("localhost:%d", port)
+
+	options, _, addr := robottestutils.CreateBaseOptionsAndListener(t)
 	err = remoteRobot.StartWeb(ctx, options)
 	test.That(t, err, test.ShouldBeNil)
-	addr := fmt.Sprintf("localhost:%d", port)
 
 	// make the local robot
 	localConfig := &config.Config{
@@ -281,7 +309,7 @@ func TestServiceWithRemote(t *testing.T) {
 				Type:      gripper.SubtypeName,
 				Model:     "fake",
 				Frame: &config.Frame{
-					Parent: "bar.pieceArm",
+					Parent: "bar:pieceArm",
 				},
 			},
 		},
@@ -289,50 +317,46 @@ func TestServiceWithRemote(t *testing.T) {
 			{
 				Name:    "bar",
 				Address: addr,
-				Prefix:  true,
 				Frame: &config.Frame{
 					Parent:      "foo",
-					Translation: spatialmath.TranslationConfig{100, 200, 300},
+					Translation: r3.Vector{100, 200, 300},
 					Orientation: &spatialmath.R4AA{math.Pi / 2., 0, 0, 1},
 				},
 			},
 			{
 				Name:    "squee",
-				Prefix:  false,
 				Address: addr,
 				Frame: &config.Frame{
 					Parent:      referenceframe.World,
-					Translation: spatialmath.TranslationConfig{500, 600, 700},
+					Translation: r3.Vector{500, 600, 700},
 					Orientation: &spatialmath.R4AA{math.Pi / 2., 1, 0, 0},
 				},
 			},
 			{
 				Name:    "dontAddMe", // no frame info, should be skipped
-				Prefix:  true,
 				Address: addr,
 			},
 		},
 	}
 
 	// make local robot
-	testPose := spatialmath.NewPoseFromAxisAngle(
+	testPose := spatialmath.NewPoseFromOrientation(
 		r3.Vector{X: 1., Y: 2., Z: 3.},
-		r3.Vector{X: 0., Y: 1., Z: 0.},
-		math.Pi/2,
+		&spatialmath.R4AA{Theta: math.Pi / 2, RX: 0., RY: 1., RZ: 0.},
 	)
 
 	transformMsgs := []*commonpb.Transform{
 		{
 			ReferenceFrame: "frame1",
 			PoseInObserverFrame: &commonpb.PoseInFrame{
-				ReferenceFrame: "pieceArm",
+				ReferenceFrame: "bar:pieceArm",
 				Pose:           spatialmath.PoseToProtobuf(testPose),
 			},
 		},
 		{
 			ReferenceFrame: "frame2",
 			PoseInObserverFrame: &commonpb.PoseInFrame{
-				ReferenceFrame: "pieceGripper",
+				ReferenceFrame: "bar:pieceGripper",
 				Pose:           spatialmath.PoseToProtobuf(testPose),
 			},
 		},

@@ -3,12 +3,13 @@ package config
 import (
 	"crypto/tls"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"sort"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"go.viam.com/utils/pexec"
+
+	"go.viam.com/rdk/resource"
 )
 
 // A Diff is the difference between two configs, left and right
@@ -34,15 +35,18 @@ type ModifiedConfigDiff struct {
 
 // DiffConfigs returns the difference between the two given configs
 // from left to right.
-func DiffConfigs(left, right *Config) (*Diff, error) {
-	PrettyDiff, err := prettyDiff(left, right)
-	if err != nil {
-		return nil, err
+func DiffConfigs(left, right Config, revealSensitiveConfigDiffs bool) (_ *Diff, err error) {
+	var PrettyDiff string
+	if revealSensitiveConfigDiffs {
+		PrettyDiff, err = prettyDiff(left, right)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	diff := Diff{
-		Left:       left,
-		Right:      right,
+		Left:       &left,
+		Right:      &right,
 		Added:      &Config{},
 		Modified:   &ModifiedConfigDiff{},
 		Removed:    &Config{},
@@ -56,37 +60,92 @@ func DiffConfigs(left, right *Config) (*Diff, error) {
 	// If left contains something right does and they are equal => no diff
 	// Note: generics would be nice here!
 	different := diffRemotes(left.Remotes, right.Remotes, &diff)
-	componentsDifferent, err := diffComponents(left.Components, right.Components, &diff)
-	if err != nil {
-		return nil, err
-	}
+	componentsDifferent := diffComponents(left.Components, right.Components, &diff)
+
 	different = componentsDifferent || different
-	servicesDifferent, err := diffServices(left.Services, right.Services, &diff)
-	if err != nil {
-		return nil, err
-	}
+	servicesDifferent := diffServices(left.Services, right.Services, &diff)
+
 	different = servicesDifferent || different
 	different = diffProcesses(left.Processes, right.Processes, &diff) || different
 	diff.ResourcesEqual = !different
 
-	networkDifferent := diffNetworkingCfg(left, right)
+	networkDifferent := diffNetworkingCfg(&left, &right)
 	diff.NetworkEqual = !networkDifferent
 
 	return &diff, nil
 }
 
-func prettyDiff(left, right *Config) (string, error) {
-	leftMd, err := json.MarshalIndent(left, "", " ")
+func prettyDiff(left, right Config) (string, error) {
+	leftMd, err := json.Marshal(left)
 	if err != nil {
 		return "", err
 	}
-	rightMd, err := json.MarshalIndent(right, "", " ")
+	rightMd, err := json.Marshal(right)
+	if err != nil {
+		return "", err
+	}
+	var leftClone, rightClone Config
+	if err := json.Unmarshal(leftMd, &leftClone); err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(rightMd, &rightClone); err != nil {
+		return "", err
+	}
+	left = leftClone
+	right = rightClone
+
+	mask := "******"
+	sanitizeConfig := func(conf *Config) {
+		// Note(erd): keep in mind this will destroy the actual pretty diffing of these which
+		// is fine because we aren't considering pretty diff changes to these fields at this level
+		// of the stack.
+		if conf.Cloud != nil {
+			if conf.Cloud.Secret != "" {
+				conf.Cloud.Secret = mask
+			}
+			if conf.Cloud.LocationSecret != "" {
+				conf.Cloud.LocationSecret = mask
+			}
+			// Not really a secret but annoying to diff
+			if conf.Cloud.TLSCertificate != "" {
+				conf.Cloud.TLSCertificate = mask
+			}
+			if conf.Cloud.TLSPrivateKey != "" {
+				conf.Cloud.TLSPrivateKey = mask
+			}
+		}
+		for _, hdlr := range conf.Auth.Handlers {
+			for key := range hdlr.Config {
+				hdlr.Config[key] = mask
+			}
+		}
+		for i := range conf.Remotes {
+			rem := &conf.Remotes[i]
+			if rem.Secret != "" {
+				rem.Secret = mask
+			}
+			if rem.Auth.Credentials != nil {
+				rem.Auth.Credentials.Payload = mask
+			}
+			if rem.Auth.SignalingCreds != nil {
+				rem.Auth.SignalingCreds.Payload = mask
+			}
+		}
+	}
+	sanitizeConfig(&left)
+	sanitizeConfig(&right)
+
+	leftMd, err = json.MarshalIndent(left, "", " ")
+	if err != nil {
+		return "", err
+	}
+	rightMd, err = json.MarshalIndent(right, "", " ")
 	if err != nil {
 		return "", err
 	}
 
 	dmp := diffmatchpatch.New()
-	diffs := dmp.DiffMain(string(leftMd), string(rightMd), false)
+	diffs := dmp.DiffMain(string(leftMd), string(rightMd), true)
 	filteredDiffs := make([]diffmatchpatch.Diff, 0, len(diffs))
 	for _, d := range diffs {
 		if d.Type == diffmatchpatch.DiffEqual {
@@ -143,25 +202,23 @@ func diffRemote(left, right Remote, diff *Diff) bool {
 	return true
 }
 
-func diffComponents(left, right []Component, diff *Diff) (bool, error) {
-	leftIndex := make(map[string]int)
-	leftM := make(map[string]Component)
+//nolint:dupl
+func diffComponents(left, right []Component, diff *Diff) bool {
+	leftIndex := make(map[resource.Name]int)
+	leftM := make(map[resource.Name]Component)
 	for idx, l := range left {
-		leftM[l.Name] = l
-		leftIndex[l.Name] = idx
+		leftM[l.ResourceName()] = l
+		leftIndex[l.ResourceName()] = idx
 	}
 
 	var removed []int
 
 	var different bool
 	for _, r := range right {
-		l, ok := leftM[r.Name]
-		delete(leftM, r.Name)
+		l, ok := leftM[r.ResourceName()]
+		delete(leftM, r.ResourceName())
 		if ok {
-			componentDifferent, err := diffComponent(l, r, diff)
-			if err != nil {
-				return false, err
-			}
+			componentDifferent := diffComponent(l, r, diff)
 			different = componentDifferent || different
 			continue
 		}
@@ -177,18 +234,15 @@ func diffComponents(left, right []Component, diff *Diff) (bool, error) {
 	for _, idx := range removed {
 		diff.Removed.Components = append(diff.Removed.Components, left[idx])
 	}
-	return different, nil
+	return different
 }
 
-func diffComponent(left, right Component, diff *Diff) (bool, error) {
+func diffComponent(left, right Component, diff *Diff) bool {
 	if reflect.DeepEqual(left, right) {
-		return false, nil
-	}
-	if left.Type != right.Type || left.SubType != right.SubType {
-		return false, fmt.Errorf("cannot modify type of existing component %q", left.Name)
+		return false
 	}
 	diff.Modified.Components = append(diff.Modified.Components, right)
-	return true, nil
+	return true
 }
 
 func diffProcesses(left, right []pexec.ProcessConfig, diff *Diff) bool {
@@ -232,25 +286,23 @@ func diffProcess(left, right pexec.ProcessConfig, diff *Diff) bool {
 	return true
 }
 
-func diffServices(left, right []Service, diff *Diff) (bool, error) {
-	leftIndex := make(map[string]int)
-	leftM := make(map[string]Service)
+//nolint:dupl
+func diffServices(left, right []Service, diff *Diff) bool {
+	leftIndex := make(map[resource.Name]int)
+	leftM := make(map[resource.Name]Service)
 	for idx, l := range left {
-		leftM[string(l.Type)] = l
-		leftIndex[string(l.Type)] = idx
+		leftM[l.ResourceName()] = l
+		leftIndex[l.ResourceName()] = idx
 	}
 
 	var removed []int
 
 	var different bool
 	for _, r := range right {
-		l, ok := leftM[string(r.Type)]
-		delete(leftM, string(r.Type))
+		l, ok := leftM[r.ResourceName()]
+		delete(leftM, r.ResourceName())
 		if ok {
-			serviceDifferent, err := diffService(l, r, diff)
-			if err != nil {
-				return false, err
-			}
+			serviceDifferent := diffService(l, r, diff)
 			different = serviceDifferent || different
 			continue
 		}
@@ -266,18 +318,15 @@ func diffServices(left, right []Service, diff *Diff) (bool, error) {
 	for _, idx := range removed {
 		diff.Removed.Services = append(diff.Removed.Services, left[idx])
 	}
-	return different, nil
+	return different
 }
 
-func diffService(left, right Service, diff *Diff) (bool, error) {
+func diffService(left, right Service, diff *Diff) bool {
 	if reflect.DeepEqual(left, right) {
-		return false, nil
-	}
-	if left.Type != right.Type {
-		return false, fmt.Errorf("cannot modify type of existing service %q", left.Name)
+		return false
 	}
 	diff.Modified.Services = append(diff.Modified.Services, right)
-	return true, nil
+	return true
 }
 
 // diffNetworkingCfg returns true if any part of the networking config is different.
@@ -314,6 +363,7 @@ func diffTLS(leftTLS, rightTLS *tls.Config) bool {
 	case leftTLS == nil && rightTLS == nil:
 		return false
 	case leftTLS == nil && rightTLS != nil:
+		fallthrough
 	case leftTLS != nil && rightTLS == nil:
 		return true
 	}

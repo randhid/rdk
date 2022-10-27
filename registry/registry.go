@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/edaniels/golog"
 	"github.com/jhump/protoreflect/desc"
@@ -49,31 +50,38 @@ func getCallerName() string {
 }
 
 // RegisterService registers a service type to a registration.
-func RegisterService(subtype resource.Subtype, creator Service) {
+func RegisterService(subtype resource.Subtype, model string, creator Service) {
 	creator.RegistrarLoc = getCallerName()
-	_, old := serviceRegistry[subtype.String()]
+	qName := fmt.Sprintf("%s/%s", subtype, model)
+	_, old := serviceRegistry[qName]
 	if old {
-		panic(errors.Errorf("trying to register two services with same subtype: %s", subtype))
+		panic(errors.Errorf("trying to register two services with same subtype:%s, model:%s", subtype, model))
 	}
 	if creator.Constructor == nil {
 		panic(errors.Errorf("cannot register a nil constructor for subtype: %s", subtype))
 	}
-	serviceRegistry[subtype.String()] = creator
+	serviceRegistry[qName] = creator
 }
 
 // ServiceLookup looks up a service registration by the given type. nil is returned if
 // there is no registration.
-func ServiceLookup(subtype resource.Subtype) *Service {
-	registration, ok := RegisteredServices()[subtype.String()]
-	if ok {
+func ServiceLookup(subtype resource.Subtype, model string) *Service {
+	qName := fmt.Sprintf("%s/%s", subtype, model)
+	if registration, ok := RegisteredServices()[qName]; ok {
 		return &registration
 	}
 	return nil
 }
 
 type (
-	// A CreateComponent creates a resource from a given config.
-	CreateComponent func(ctx context.Context, r robot.Robot, config config.Component, logger golog.Logger) (interface{}, error)
+	// Dependencies is a map of resources that a component requires for creation.
+	Dependencies map[resource.Name]interface{}
+
+	// A CreateComponentWithRobot creates a resource from a robot and a given config.
+	CreateComponentWithRobot func(ctx context.Context, r robot.Robot, config config.Component, logger golog.Logger) (interface{}, error)
+
+	// A CreateComponent creates a resource from a collection of dependencies and a given config.
+	CreateComponent func(ctx context.Context, deps Dependencies, config config.Component, logger golog.Logger) (interface{}, error)
 
 	// A CreateReconfigurable makes a reconfigurable resource from a given resource.
 	CreateReconfigurable func(resource interface{}) (resource.Reconfigurable, error)
@@ -91,10 +99,22 @@ type (
 	CreateRPCClient func(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) interface{}
 )
 
+// A DependencyNotReadyError is used whenever we reference a dependency that has not been
+// constructed and registered yet.
+type DependencyNotReadyError struct {
+	Name string
+}
+
+func (e *DependencyNotReadyError) Error() string {
+	return fmt.Sprintf("dependency %q has not been registered yet", e.Name)
+}
+
 // Component stores a resource constructor (mandatory) and a Frame building function (optional).
 type Component struct {
 	RegDebugInfo
 	Constructor CreateComponent
+	// TODO(RSDK-418): remove this legacy constructor once all components that use it no longer need to receive the entire robot.
+	RobotConstructor CreateComponentWithRobot
 }
 
 // ResourceSubtype stores subtype-specific functions and clients.
@@ -105,6 +125,10 @@ type ResourceSubtype struct {
 	RPCServiceDesc        *grpc.ServiceDesc
 	ReflectRPCServiceDesc *desc.ServiceDescriptor `copy:"shallow"`
 	RPCClient             CreateRPCClient
+
+	// MaxInstance sets a limit on the number of this subtype allowed on a robot.
+	// If MaxInstance is not set then it will default to 0 and there will be no limit.
+	MaxInstance int
 }
 
 // SubtypeGrpc stores functions necessary for a resource subtype to be accessible through grpc.
@@ -125,7 +149,7 @@ func RegisterComponent(subtype resource.Subtype, model string, creator Component
 	if old {
 		panic(errors.Errorf("trying to register two resources with same subtype:%s, model:%s", subtype, model))
 	}
-	if creator.Constructor == nil {
+	if creator.Constructor == nil && creator.RobotConstructor == nil {
 		panic(errors.Errorf("cannot register a nil constructor for subtype:%s, model:%s", subtype, model))
 	}
 	componentRegistry[qName] = creator
@@ -227,4 +251,16 @@ func lookupSubtype(subtypeName resource.SubtypeName) (*resource.Subtype, bool) {
 		}
 	}
 	return nil, false
+}
+
+// FindValidServiceModels returns a list of valid models for a specified service.
+func FindValidServiceModels(rName resource.Name) []string {
+	validModels := make([]string, 0)
+	for key := range RegisteredServices() {
+		if strings.Contains(key, rName.Subtype.String()) {
+			splitName := strings.Split(key, "/")
+			validModels = append(validModels, splitName[1])
+		}
+	}
+	return validModels
 }

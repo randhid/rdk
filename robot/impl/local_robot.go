@@ -6,28 +6,30 @@ package robotimpl
 
 import (
 	"context"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/edaniels/golog"
 	"github.com/pkg/errors"
+	"go.uber.org/multierr"
+	commonpb "go.viam.com/api/common/v1"
 	goutils "go.viam.com/utils"
 	"go.viam.com/utils/pexec"
+	"go.viam.com/utils/rpc"
 
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/discovery"
 	"go.viam.com/rdk/operation"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
+	"go.viam.com/rdk/robot/client"
 	"go.viam.com/rdk/robot/framesystem"
 	framesystemparts "go.viam.com/rdk/robot/framesystem/parts"
 	"go.viam.com/rdk/robot/web"
 	weboptions "go.viam.com/rdk/robot/web/options"
-	"go.viam.com/rdk/services/datamanager"
-	"go.viam.com/rdk/services/sensors"
-	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/utils"
 )
 
@@ -38,16 +40,7 @@ const (
 	framesystemName internalServiceName = "framesystem"
 )
 
-var (
-	_ = robot.LocalRobot(&localRobot{})
-
-	// defaultSvc is a list of default robot services.
-	defaultSvc = []resource.Name{
-		sensors.Name,
-		datamanager.Name,
-		vision.Name,
-	}
-)
+var _ = robot.LocalRobot(&localRobot{})
 
 // localRobot satisfies robot.LocalRobot and defers most
 // logic to its manager.
@@ -59,7 +52,17 @@ type localRobot struct {
 	logger     golog.Logger
 
 	// services internal to a localRobot. Currently just web, more to come.
-	internalServices map[internalServiceName]interface{}
+	internalServices     map[internalServiceName]interface{}
+	defaultServicesNames map[resource.Subtype]resource.Name
+
+	activeBackgroundWorkers *sync.WaitGroup
+	cancelBackgroundWorkers func()
+
+	remotesChanged             chan string
+	closeContext               context.Context
+	triggerConfig              chan bool
+	configTimer                *time.Ticker
+	revealSensitiveConfigDiffs bool
 }
 
 // webService returns the localRobot's web service. Raises if the service has not been initialized.
@@ -135,7 +138,57 @@ func (r *localRobot) Close(ctx context.Context) error {
 		}
 	}
 
+	if r.cancelBackgroundWorkers != nil {
+		close(r.remotesChanged)
+		r.cancelBackgroundWorkers()
+		r.cancelBackgroundWorkers = nil
+		if r.configTimer != nil {
+			r.configTimer.Stop()
+		}
+		close(r.triggerConfig)
+	}
+	r.activeBackgroundWorkers.Wait()
 	return r.manager.Close(ctx)
+}
+
+// StopAll cancels all current and outstanding operations for the robot and stops all actuators and movement.
+func (r *localRobot) StopAll(ctx context.Context, extra map[resource.Name]map[string]interface{}) error {
+	// Stop all operations
+	for _, op := range r.OperationManager().All() {
+		op.Cancel()
+	}
+
+	// Stop all stoppable resources
+	resourceErrs := []string{}
+	for _, name := range r.ResourceNames() {
+		res, err := r.ResourceByName(name)
+		if err != nil {
+			resourceErrs = append(resourceErrs, name.Name)
+			continue
+		}
+
+		sr, ok := res.(resource.Stoppable)
+		if ok {
+			err = sr.Stop(ctx, extra[name])
+			if err != nil {
+				resourceErrs = append(resourceErrs, name.Name)
+			}
+		}
+
+		// TODO[njooma]: OldStoppable - Will be deprecated
+		osr, ok := res.(resource.OldStoppable)
+		if ok {
+			err = osr.Stop(ctx)
+			if err != nil {
+				resourceErrs = append(resourceErrs, name.Name)
+			}
+		}
+	}
+
+	if len(resourceErrs) > 0 {
+		return errors.Errorf("failed to stop components named %s", strings.Join(resourceErrs, ","))
+	}
+	return nil
 }
 
 // Config returns the config used to construct the robot. Only local resources are returned.
@@ -172,13 +225,17 @@ func (r *localRobot) StopWeb() error {
 
 // remoteNameByResource returns the remote the resource is pulled from, if found.
 // False can mean either the resource doesn't exist or is local to the robot.
-func (r *localRobot) remoteNameByResource(resourceName resource.Name) (string, bool) {
-	return r.manager.remoteNameByResource(resourceName)
+func remoteNameByResource(resourceName resource.Name) (string, bool) {
+	if !resourceName.ContainsRemoteNames() {
+		return "", false
+	}
+	remote := strings.Split(string(resourceName.Remote), ":")
+	return remote[0], true
 }
 
-func (r *localRobot) GetStatus(ctx context.Context, resourceNames []resource.Name) ([]robot.Status, error) {
+func (r *localRobot) Status(ctx context.Context, resourceNames []resource.Name) ([]robot.Status, error) {
 	r.mu.Lock()
-	resources := make(map[resource.Name]interface{}, len(r.manager.resources.Nodes))
+	resources := make(map[resource.Name]interface{}, len(r.manager.resources.Names()))
 	for _, name := range r.ResourceNames() {
 		resource, err := r.ResourceByName(name)
 		if err != nil {
@@ -206,29 +263,15 @@ func (r *localRobot) GetStatus(ctx context.Context, resourceNames []resource.Nam
 	// group each resource name by remote and also get its corresponding name on the remote
 	groupedResources := make(map[string]map[resource.Name]resource.Name)
 	for name := range deduped {
-		remoteName, ok := r.remoteNameByResource(name)
+		remoteName, ok := remoteNameByResource(name)
 		if !ok {
 			continue
 		}
-		remote, ok := r.RemoteByName(remoteName)
-		if !ok {
-			// should never happen
-			r.Logger().Errorw("remote robot not found while creating status", "remote", remoteName)
-			continue
-		}
-		rRobot, ok := remote.(*remoteRobot)
-		if !ok {
-			// should never happen
-			r.Logger().Errorw("remote robot not a *remoteRobot while creating status", "remote", remoteName)
-			continue
-		}
-		unprefixed := rRobot.unprefixResourceName(name)
-
 		mappings, ok := groupedResources[remoteName]
 		if !ok {
 			mappings = make(map[resource.Name]resource.Name)
 		}
-		mappings[unprefixed] = name
+		mappings[name.PopRemote()] = name
 		groupedResources[remoteName] = mappings
 	}
 	// make requests and map it back to the local resource name
@@ -245,7 +288,7 @@ func (r *localRobot) GetStatus(ctx context.Context, resourceNames []resource.Nam
 			remoteRNames = append(remoteRNames, n)
 		}
 
-		s, err := remote.GetStatus(ctx, remoteRNames)
+		s, err := remote.Status(ctx, remoteRNames)
 		if err != nil {
 			return nil, err
 		}
@@ -289,12 +332,48 @@ func (r *localRobot) GetStatus(ctx context.Context, resourceNames []resource.Nam
 	return statuses, nil
 }
 
+func (r *localRobot) updateDefaultServiceNames(cfg *config.Config) *config.Config {
+	// See if default service already exists in the config
+	seen := make(map[resource.Subtype]bool)
+	for _, name := range resource.DefaultServices {
+		seen[name.Subtype] = false
+		r.defaultServicesNames[name.Subtype] = name
+	}
+	// Mark default service subtypes in the map as true
+	for _, val := range cfg.Services {
+		if _, ok := seen[val.ResourceName().Subtype]; ok {
+			seen[val.ResourceName().Subtype] = true
+			r.defaultServicesNames[val.ResourceName().Subtype] = val.ResourceName()
+		}
+	}
+	// default services added if they are not already defined in the config
+	for _, name := range resource.DefaultServices {
+		if seen[name.Subtype] {
+			continue
+		}
+		svcCfg := config.Service{
+			Name:      name.Name,
+			Model:     resource.DefaultModelName,
+			Namespace: name.Namespace,
+			Type:      config.ServiceType(name.ResourceSubtype),
+		}
+		cfg.Services = append(cfg.Services, svcCfg)
+	}
+	return cfg
+}
+
 func newWithResources(
 	ctx context.Context,
 	cfg *config.Config,
 	resources map[resource.Name]interface{},
 	logger golog.Logger,
+	opts ...Option,
 ) (robot.LocalRobot, error) {
+	var rOpts options
+	for _, opt := range opts {
+		opt.apply(&rOpts)
+	}
+	closeCtx, cancel := context.WithCancel(ctx)
 	r := &localRobot{
 		manager: newResourceManager(
 			resourceManagerOptions{
@@ -305,8 +384,16 @@ func newWithResources(
 			},
 			logger,
 		),
-		operations: operation.NewManager(),
-		logger:     logger,
+		operations:                 operation.NewManager(),
+		logger:                     logger,
+		remotesChanged:             make(chan string),
+		activeBackgroundWorkers:    &sync.WaitGroup{},
+		closeContext:               closeCtx,
+		cancelBackgroundWorkers:    cancel,
+		defaultServicesNames:       make(map[resource.Subtype]resource.Name),
+		triggerConfig:              make(chan bool),
+		configTimer:                nil,
+		revealSensitiveConfigDiffs: rOpts.revealSensitiveConfigDiffs,
 	}
 
 	var successful bool
@@ -317,54 +404,133 @@ func newWithResources(
 			}
 		}
 	}()
-	r.config = cfg
-
-	// default services
-	for _, name := range defaultSvc {
-		cfg := config.Service{
-			Namespace: name.Namespace,
-			Type:      config.ServiceType(name.ResourceSubtype),
-		}
-		svc, err := r.newService(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		r.manager.addResource(name, svc)
-	}
-
-	r.internalServices = make(map[internalServiceName]interface{})
-	r.internalServices[webName] = web.New(ctx, r, logger)
-	r.internalServices[framesystemName] = framesystem.New(ctx, r, logger)
-
-	if err := r.manager.processConfig(ctx, cfg, r, logger); err != nil {
+	// start process manager early
+	if err := r.manager.processManager.Start(ctx); err != nil {
 		return nil, err
 	}
+
+	cfg = r.updateDefaultServiceNames(cfg)
+
+	r.activeBackgroundWorkers.Add(1)
+	// this goroutine listen for changes in connection status of a remote
+	goutils.ManagedGo(func() {
+		for {
+			if closeCtx.Err() != nil {
+				return
+			}
+			select {
+			case <-closeCtx.Done():
+				return
+			case n, ok := <-r.remotesChanged:
+				if !ok {
+					return
+				}
+				if rr, ok := r.manager.RemoteByName(n); ok {
+					rn := fromRemoteNameToRemoteNodeName(n)
+					r.manager.updateRemoteResourceNames(ctx, rn, rr, r)
+					r.updateDefaultServices(ctx)
+				}
+			}
+		}
+	}, r.activeBackgroundWorkers.Done)
+
+	r.activeBackgroundWorkers.Add(1)
+	r.configTimer = time.NewTicker(25 * time.Second)
+	// this goroutine tries to complete the config if any resources are still unconfigured, it execute on a timer or via a channel
+	goutils.ManagedGo(func() {
+		for {
+			if closeCtx.Err() != nil {
+				return
+			}
+			select {
+			case <-closeCtx.Done():
+				return
+			case <-r.triggerConfig:
+			case <-r.configTimer.C:
+			}
+			if r.manager.anyResourcesNotConfigured() {
+				r.manager.completeConfig(closeCtx, r)
+				r.updateDefaultServices(ctx)
+			}
+			if r.manager.updateRemotesResourceNames(ctx, r) {
+				r.updateDefaultServices(ctx)
+			}
+		}
+	}, r.activeBackgroundWorkers.Done)
+
+	r.internalServices = make(map[internalServiceName]interface{})
+	r.internalServices[webName] = web.New(ctx, r, logger, rOpts.webOptions...)
+	r.internalServices[framesystemName] = framesystem.New(ctx, r, logger)
+
+	r.config = &config.Config{}
+
+	r.Reconfigure(ctx, cfg)
 
 	for name, res := range resources {
 		r.manager.addResource(name, res)
 	}
 
-	// update default services - done here so that all resources have been created and can be addressed.
-	if err := r.updateDefaultServices(ctx); err != nil {
-		return nil, err
+	if len(resources) != 0 {
+		r.updateDefaultServices(ctx)
 	}
-	r.manager.updateResourceRemoteNames()
+
 	successful = true
 	return r, nil
 }
 
 // New returns a new robot with parts sourced from the given config.
-func New(ctx context.Context, cfg *config.Config, logger golog.Logger) (robot.LocalRobot, error) {
-	return newWithResources(ctx, cfg, nil, logger)
+func New(
+	ctx context.Context,
+	cfg *config.Config,
+	logger golog.Logger,
+	opts ...Option,
+) (robot.LocalRobot, error) {
+	return newWithResources(ctx, cfg, nil, logger, opts...)
 }
 
 func (r *localRobot) newService(ctx context.Context, config config.Service) (interface{}, error) {
 	rName := config.ResourceName()
-	f := registry.ServiceLookup(rName.Subtype)
+	f := registry.ServiceLookup(rName.Subtype, config.Model)
+	// If service model/type not found then print list of valid models they can choose from
 	if f == nil {
-		return nil, errors.Errorf("unknown service type: %s", rName.Subtype)
+		validModels := registry.FindValidServiceModels(rName)
+		return nil, errors.Errorf("unknown service subtype: %s and/or model: %s use one of the following valid models: %s",
+			rName.Subtype, config.Model, strings.Join(validModels, ", "))
 	}
-	return f.Constructor(ctx, r, config, r.logger)
+
+	c := registry.ResourceSubtypeLookup(rName.Subtype)
+
+	// If MaxInstance equals zero then there is not limit on the number of services
+	if c.MaxInstance != 0 {
+		if err := r.checkMaxInstance(rName.Subtype, c.MaxInstance); err != nil {
+			return nil, err
+		}
+	}
+	svc, err := f.Constructor(ctx, r, config, r.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	if c == nil || c.Reconfigurable == nil {
+		return svc, nil
+	}
+	return c.Reconfigurable(svc)
+}
+
+// getDependencies derives a collection of dependencies from a robot for a given
+// component's name. We don't use the resource manager for this information since
+// it is not be constructed at this point.
+func (r *localRobot) getDependencies(rName resource.Name) (registry.Dependencies, error) {
+	deps := make(registry.Dependencies)
+	for _, dep := range r.manager.resources.GetAllParentsOf(rName) {
+		r, err := r.ResourceByName(dep)
+		if err != nil {
+			return nil, &registry.DependencyNotReadyError{Name: dep.Name}
+		}
+		deps[dep] = r
+	}
+
+	return deps, nil
 }
 
 func (r *localRobot) newResource(ctx context.Context, config config.Component) (interface{}, error) {
@@ -373,27 +539,37 @@ func (r *localRobot) newResource(ctx context.Context, config config.Component) (
 	if f == nil {
 		return nil, errors.Errorf("unknown component subtype: %s and/or model: %s", rName.Subtype, config.Model)
 	}
-	newResource, err := f.Constructor(ctx, r, config, r.logger)
+
+	deps, err := r.getDependencies(rName)
 	if err != nil {
 		return nil, err
 	}
+
+	var newResource interface{}
+	if f.Constructor != nil {
+		newResource, err = f.Constructor(ctx, deps, config, r.logger)
+	} else {
+		r.logger.Warnw("using legacy constructor", "subtype", rName.Subtype, "model", config.Model)
+		newResource, err = f.RobotConstructor(ctx, r, config, r.logger)
+	}
+
+	if err != nil {
+		return nil, errors.Errorf("error building resource %s/%s/%s: %s", config.Model, rName.Subtype, config.Name, err)
+	}
+
 	c := registry.ResourceSubtypeLookup(rName.Subtype)
 	if c == nil || c.Reconfigurable == nil {
 		return newResource, nil
 	}
-	return c.Reconfigurable(newResource)
+	wrapped, err := c.Reconfigurable(newResource)
+	if err != nil {
+		return nil, multierr.Combine(err, goutils.TryClose(ctx, newResource))
+	}
+	return wrapped, nil
 }
 
-// ConfigUpdateable is implemented when component/service of a robot should be updated with the config.
-type ConfigUpdateable interface {
-	// Update updates the resource
-	Update(context.Context, *config.Config) error
-}
-
-func (r *localRobot) updateDefaultServices(ctx context.Context) error {
-	// grab all resources
+func (r *localRobot) updateDefaultServices(ctx context.Context) {
 	resources := map[resource.Name]interface{}{}
-
 	for _, n := range r.ResourceNames() {
 		// TODO(RSDK-333) if not found, could mean a name clash or a remote service
 		res, err := r.ResourceByName(n)
@@ -403,19 +579,22 @@ func (r *localRobot) updateDefaultServices(ctx context.Context) error {
 		resources[n] = res
 	}
 
-	for _, name := range defaultSvc {
+	for _, name := range r.defaultServicesNames {
 		svc, err := r.ResourceByName(name)
 		if err != nil {
-			return utils.NewResourceNotFoundError(name)
+			r.Logger().Errorw("resource not found", "error", utils.NewResourceNotFoundError(name))
+			continue
 		}
 		if updateable, ok := svc.(resource.Updateable); ok {
 			if err := updateable.Update(ctx, resources); err != nil {
-				return err
+				r.Logger().Errorw("failed to update resource", "resource", name, "error", err)
+				continue
 			}
 		}
-		if configUpdateable, ok := svc.(ConfigUpdateable); ok {
+		if configUpdateable, ok := svc.(config.Updateable); ok {
 			if err := configUpdateable.Update(ctx, r.config); err != nil {
-				return err
+				r.Logger().Errorw("config for service failed to update", "resource", name, "error", err)
+				continue
 			}
 		}
 	}
@@ -423,12 +602,11 @@ func (r *localRobot) updateDefaultServices(ctx context.Context) error {
 	for _, svc := range r.internalServices {
 		if updateable, ok := svc.(resource.Updateable); ok {
 			if err := updateable.Update(ctx, resources); err != nil {
-				return err
+				r.Logger().Errorw("failed to update internal service", "resource", svc, "error", err)
+				continue
 			}
 		}
 	}
-
-	return nil
 }
 
 // Refresh does nothing for now.
@@ -462,29 +640,34 @@ func (r *localRobot) TransformPose(
 }
 
 // RobotFromConfigPath is a helper to read and process a config given its path and then create a robot based on it.
-func RobotFromConfigPath(ctx context.Context, cfgPath string, logger golog.Logger) (robot.LocalRobot, error) {
+func RobotFromConfigPath(ctx context.Context, cfgPath string, logger golog.Logger, opts ...Option) (robot.LocalRobot, error) {
 	cfg, err := config.Read(ctx, cfgPath, logger)
 	if err != nil {
-		logger.Fatal("cannot read config")
+		logger.Error("cannot read config")
 		return nil, err
 	}
-	return RobotFromConfig(ctx, cfg, logger)
+	return RobotFromConfig(ctx, cfg, logger, opts...)
 }
 
 // RobotFromConfig is a helper to process a config and then create a robot based on it.
-func RobotFromConfig(ctx context.Context, cfg *config.Config, logger golog.Logger) (robot.LocalRobot, error) {
+func RobotFromConfig(ctx context.Context, cfg *config.Config, logger golog.Logger, opts ...Option) (robot.LocalRobot, error) {
 	tlsConfig := config.NewTLSConfig(cfg)
 	processedCfg, err := config.ProcessConfig(cfg, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
-	return New(ctx, processedCfg, logger)
+	return New(ctx, processedCfg, logger, opts...)
 }
 
 // RobotFromResources creates a new robot consisting of the given resources. Using RobotFromConfig is preferred
 // to support more streamlined reconfiguration functionality.
-func RobotFromResources(ctx context.Context, resources map[resource.Name]interface{}, logger golog.Logger) (robot.LocalRobot, error) {
-	return newWithResources(ctx, &config.Config{}, resources, logger)
+func RobotFromResources(
+	ctx context.Context,
+	resources map[resource.Name]interface{},
+	logger golog.Logger,
+	opts ...Option,
+) (robot.LocalRobot, error) {
+	return newWithResources(ctx, &config.Config{}, resources, logger, opts...)
 }
 
 // DiscoverComponents takes a list of discovery queries and returns corresponding
@@ -513,4 +696,102 @@ func (r *localRobot) DiscoverComponents(ctx context.Context, qs []discovery.Quer
 		}
 	}
 	return discoveries, nil
+}
+
+func dialRobotClient(ctx context.Context,
+	config config.Remote,
+	logger golog.Logger,
+	dialOpts ...rpc.DialOption,
+) (*client.RobotClient, error) {
+	connectionCheckInterval := config.ConnectionCheckInterval
+	if connectionCheckInterval == 0 {
+		connectionCheckInterval = 10 * time.Second
+	}
+	reconnectInterval := config.ReconnectInterval
+	if reconnectInterval == 0 {
+		reconnectInterval = 1 * time.Second
+	}
+
+	robotClient, err := client.New(
+		ctx,
+		config.Address,
+		logger,
+		client.WithDialOptions(dialOpts...),
+		client.WithCheckConnectedEvery(connectionCheckInterval),
+		client.WithReconnectEvery(reconnectInterval),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return robotClient, nil
+}
+
+// Reconfigure will safely reconfigure a robot based on the given config. It will make
+// a best effort to remove no longer in use parts, but if it fails to do so, they could
+// possibly leak resources.
+func (r *localRobot) Reconfigure(ctx context.Context, newConfig *config.Config) {
+	var allErrs error
+
+	newConfig = r.updateDefaultServiceNames(newConfig)
+	diff, err := config.DiffConfigs(*r.config, *newConfig, r.revealSensitiveConfigDiffs)
+	if err != nil {
+		r.logger.Errorw("error diffing the configs", "error", err)
+		return
+	}
+	if diff.ResourcesEqual {
+		return
+	}
+
+	if r.revealSensitiveConfigDiffs {
+		r.logger.Debugf("(re)configuring with %+v", diff)
+	}
+	// First we remove resources and their children that are not in the graph.
+	filtered, err := r.manager.FilterFromConfig(ctx, diff.Removed, r.logger)
+	if err != nil {
+		allErrs = multierr.Combine(allErrs, err)
+	}
+	// Second we update the resource graph.
+	// We pass a search function to look for dependencies, we should find them either in the current config or in the modified.
+	err = r.manager.updateResources(ctx, diff, func(name string) (resource.Name, bool) {
+		// first look in the current config if anything can be found
+		for _, c := range r.config.Components {
+			if c.Name == name {
+				return c.ResourceName(), true
+			}
+		}
+		// then look into what was added
+		for _, c := range diff.Added.Components {
+			if c.Name == name {
+				return c.ResourceName(), true
+			}
+		}
+		// we are trying to locate a resource that is set as a dependency but do not exist yet
+		r.logger.Debugw("processing unknown  resource", "name", name)
+		return resource.NameFromSubtype(unknownSubtype, name), true
+	})
+	if err != nil {
+		allErrs = multierr.Combine(allErrs, err)
+	}
+	r.config = newConfig
+	allErrs = multierr.Combine(allErrs, filtered.Close(ctx))
+	// Third we attempt to complete the config (see function for details)
+	r.manager.completeConfig(ctx, r)
+	r.updateDefaultServices(ctx)
+	if allErrs != nil {
+		r.logger.Errorw("the following errors were gathered during reconfiguration", "errors", allErrs)
+	}
+}
+
+// checkMaxInstance checks to see if the local robot has reached the maximum number of a specific service type that are local.
+func (r *localRobot) checkMaxInstance(subtype resource.Subtype, max int) error {
+	maxInstance := 0
+	for _, n := range r.ResourceNames() {
+		if n.Subtype == subtype && !n.ContainsRemoteNames() {
+			maxInstance++
+			if maxInstance == max {
+				return errors.Errorf("Max instance number reached for service type: %s", subtype)
+			}
+		}
+	}
+	return nil
 }

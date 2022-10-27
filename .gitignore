@@ -37,6 +37,7 @@ docs/
 # Test data
 coverage.txt
 coverage2.txt
+coverage.xml
 profile*.pdf
 
 *~
@@ -65,3 +66,13 @@ bin/
 
 # exclude files from `ag` search
 .ignore
+
+# license finder
+lf_logs/
+
+# exclude credential created during CI
+google-credentials.json
+
+# cypress output
+web/frontend/cypress/screenshots
+web/frontend/cypress/videos

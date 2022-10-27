@@ -5,15 +5,15 @@ import (
 	"math"
 
 	"github.com/golang/geo/r3"
+	commonpb "go.viam.com/api/common/v1"
 
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/utils"
 )
 
 // BoxCreator implements the GeometryCreator interface for box structs.
 type boxCreator struct {
 	halfSize r3.Vector
-	offset   Pose
+	pointCreator
 }
 
 // box is a collision geometry that represents a 3D rectangular prism, it has a pose and half size that fully define it.
@@ -28,25 +28,19 @@ func NewBoxCreator(dims r3.Vector, offset Pose) (GeometryCreator, error) {
 	if dims.X <= 0 || dims.Y <= 0 || dims.Z <= 0 {
 		return nil, newBadGeometryDimensionsError(&box{})
 	}
-	return &boxCreator{dims.Mul(0.5), offset}, nil
+	return &boxCreator{dims.Mul(0.5), pointCreator{offset}}, nil
 }
 
 // NewGeometry instantiates a new box from a BoxCreator class.
 func (bc *boxCreator) NewGeometry(pose Pose) Geometry {
-	b := &box{bc.offset, [3]float64{bc.halfSize.X, bc.halfSize.Y, bc.halfSize.Z}}
-	b.Transform(pose)
-	return b
+	return &box{Compose(bc.offset, pose), [3]float64{bc.halfSize.X, bc.halfSize.Y, bc.halfSize.Z}}
 }
 
 func (bc *boxCreator) MarshalJSON() ([]byte, error) {
-	config, err := NewGeometryConfig(bc.offset)
+	config, err := NewGeometryConfig(bc)
 	if err != nil {
 		return nil, err
 	}
-	config.Type = "box"
-	config.X = 2 * bc.halfSize.X
-	config.Y = 2 * bc.halfSize.Y
-	config.Z = 2 * bc.halfSize.Z
 	return json.Marshal(config)
 }
 
@@ -92,8 +86,8 @@ func (b *box) AlmostEqual(g Geometry) bool {
 }
 
 // Transform premultiplies the box pose with a transform, allowing the box to be moved in space.
-func (b *box) Transform(toPremultiply Pose) {
-	b.pose = Compose(toPremultiply, b.pose)
+func (b *box) Transform(toPremultiply Pose) Geometry {
+	return &box{Compose(toPremultiply, b.pose), b.halfSize}
 }
 
 // ToProto converts the box to a Geometry proto message.
@@ -101,11 +95,11 @@ func (b *box) ToProtobuf() *commonpb.Geometry {
 	return &commonpb.Geometry{
 		Center: PoseToProtobuf(b.pose),
 		GeometryType: &commonpb.Geometry_Box{
-			Box: &commonpb.RectangularPrism{
-				WidthMm:  2 * b.halfSize[0],
-				LengthMm: 2 * b.halfSize[1],
-				DepthMm:  2 * b.halfSize[2],
-			},
+			Box: &commonpb.RectangularPrism{DimsMm: &commonpb.Vector3{
+				X: 2 * b.halfSize[0],
+				Y: 2 * b.halfSize[1],
+				Z: 2 * b.halfSize[2],
+			}},
 		},
 	}
 }
@@ -214,9 +208,12 @@ func boxVsBoxCollision(a, b *box) bool {
 // the penetration depth for the two boxes, which are in collision.  If the returned float is positive it represents
 // a lower bound on the separation distance for the two boxes, which are not in collision.
 // NOTES: calculating the true separation distance is a computationally infeasible problem
-//        the "minimum translation vector" (MTV) can also be computed here but is not currently as there is no use for it yet
+//
+//	the "minimum translation vector" (MTV) can also be computed here but is not currently as there is no use for it yet
+//
 // references:  https://comp.graphics.algorithms.narkive.com/jRAgjIUh/obb-obb-distance-calculation
-//              https://dyn4j.org/2010/01/sat/#sat-nointer
+//
+//	https://dyn4j.org/2010/01/sat/#sat-nointer
 func boxVsBoxDistance(a, b *box) float64 {
 	positionDelta := PoseDelta(a.pose, b.pose).Point()
 	rmA := a.pose.Orientation().RotationMatrix()
@@ -277,9 +274,10 @@ func boxInSphere(b *box, s *sphere) bool {
 // this plane.  Per the separating hyperplane theorem, if such a plane exists (and a positive number is returned)
 // this proves that there is no collision between the boxes
 // references:  https://gamedev.stackexchange.com/questions/112883/simple-3d-obb-collision-directx9-c
-//              https://gamedev.stackexchange.com/questions/25397/obb-vs-obb-collision-detection
-//              https://www.cs.bgu.ac.il/~vgp192/wiki.files/Separating%20Axis%20Theorem%20for%20Oriented%20Bounding%20Boxes.pdf
-//              https://gamedev.stackexchange.com/questions/112883/simple-3d-obb-collision-directx9-c
+//
+//	https://gamedev.stackexchange.com/questions/25397/obb-vs-obb-collision-detection
+//	https://www.cs.bgu.ac.il/~vgp192/wiki.files/Separating%20Axis%20Theorem%20for%20Oriented%20Bounding%20Boxes.pdf
+//	https://gamedev.stackexchange.com/questions/112883/simple-3d-obb-collision-directx9-c
 func separatingAxisTest(positionDelta, plane r3.Vector, a, b *box) float64 {
 	rmA := a.pose.Orientation().RotationMatrix()
 	rmB := b.pose.Orientation().RotationMatrix()

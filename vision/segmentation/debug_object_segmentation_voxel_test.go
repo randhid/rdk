@@ -14,7 +14,6 @@ import (
 	"go.viam.com/rdk/rimage"
 	"go.viam.com/rdk/rimage/transform"
 	"go.viam.com/rdk/testutils/inject"
-	"go.viam.com/rdk/utils"
 	"go.viam.com/rdk/vision/segmentation"
 )
 
@@ -27,24 +26,26 @@ func (h *gripperVoxelSegmentTestHelper) Process(
 	t *testing.T,
 	pCtx *rimage.ProcessorContext,
 	fn string,
-	img image.Image,
+	img, img2 image.Image,
 	logger golog.Logger,
 ) error {
 	t.Helper()
 	var err error
-	ii := rimage.ConvertToImageWithDepth(img)
+	im := rimage.ConvertImage(img)
+	dm, err := rimage.ConvertImageToDepthMap(img2)
+	test.That(t, err, test.ShouldBeNil)
 	test.That(t, h.cameraParams, test.ShouldNotBeNil)
 
-	pCtx.GotDebugImage(ii.Depth.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth")
+	pCtx.GotDebugImage(dm.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth")
 
 	// Pre-process the depth map to smooth the noise out and fill holes
-	ii, err = rimage.PreprocessDepthMap(ii)
+	dm, err = rimage.PreprocessDepthMap(dm, im)
 	test.That(t, err, test.ShouldBeNil)
 
-	pCtx.GotDebugImage(ii.Depth.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth-filled")
+	pCtx.GotDebugImage(dm.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth-filled")
 
 	// Get the point cloud
-	cloud, err := h.cameraParams.ImageWithDepthToPointCloud(ii)
+	cloud, err := h.cameraParams.RGBDToPointCloud(im, dm)
 	test.That(t, err, test.ShouldBeNil)
 	pCtx.GotDebugPointCloud(cloud, "gripper-pointcloud")
 	cam := &inject.Camera{}
@@ -65,7 +66,9 @@ func (h *gripperVoxelSegmentTestHelper) Process(
 		"distance_threshold":    0.1,
 	}
 
-	voxSegments, err := segmentation.RadiusClusteringFromVoxels(context.Background(), cam, voxObjConfig)
+	segmenter, err := segmentation.NewRadiusClusteringFromVoxels(voxObjConfig)
+	test.That(t, err, test.ShouldBeNil)
+	voxSegments, err := segmenter(context.Background(), cam)
 	test.That(t, err, test.ShouldBeNil)
 
 	voxObjectClouds := []pc.PointCloud{}
@@ -88,8 +91,8 @@ func TestGripperVoxelObjectSegmentation(t *testing.T) {
 	if objSegTest == "" {
 		t.Skipf("set environmental variable %q to run this test", debugObjSeg)
 	}
-	d := rimage.NewMultipleImageTestDebugger(t, "segmentation/gripper", "*.both.gz", true)
-	camera, err := transform.NewDepthColorIntrinsicsExtrinsicsFromJSONFile(utils.ResolveFile("robots/configs/gripper_combo_parameters.json"))
+	d := rimage.NewMultipleImageTestDebugger(t, "segmentation/gripper/color", "*.png", "segmentation/gripper/depth")
+	camera, err := transform.NewDepthColorIntrinsicsExtrinsicsFromJSONFile(gripperComboParamsPath)
 	test.That(t, err, test.ShouldBeNil)
 
 	err = d.Process(t, &gripperVoxelSegmentTestHelper{camera})

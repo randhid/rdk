@@ -8,14 +8,13 @@ import (
 	"github.com/edaniels/golog"
 	"github.com/pkg/errors"
 	"go.opencensus.io/trace"
+	commonpb "go.viam.com/api/common/v1"
 
 	"go.viam.com/rdk/config"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
 	framesystemparts "go.viam.com/rdk/robot/framesystem/parts"
-	"go.viam.com/rdk/utils"
 )
 
 // SubtypeName is the name of the type of service.
@@ -33,6 +32,47 @@ type Service interface {
 	) (*referenceframe.PoseInFrame, error)
 }
 
+// RobotFsCurrentInputs will get present inputs for a framesystem from a robot and return a map of those inputs, as well as a map of the
+// InputEnabled resources that those inputs came from.
+func RobotFsCurrentInputs(
+	ctx context.Context,
+	r robot.Robot,
+	fs referenceframe.FrameSystem,
+) (map[string][]referenceframe.Input, map[string]referenceframe.InputEnabled, error) {
+	input := referenceframe.StartPositions(fs)
+
+	// build maps of relevant components and inputs from initial inputs
+	allOriginals := map[string][]referenceframe.Input{}
+	resources := map[string]referenceframe.InputEnabled{}
+	for name, original := range input {
+		// skip frames with no input
+		if len(original) == 0 {
+			continue
+		}
+
+		// add component to map
+		allOriginals[name] = original
+		components := robot.AllResourcesByName(r, name)
+		if len(components) != 1 {
+			return nil, nil, fmt.Errorf("got %d resources instead of 1 for (%s)", len(components), name)
+		}
+		component, ok := components[0].(referenceframe.InputEnabled)
+		if !ok {
+			return nil, nil, fmt.Errorf("%v(%T) is not InputEnabled", name, components[0])
+		}
+		resources[name] = component
+
+		// add input to map
+		pos, err := component.CurrentInputs(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		input[name] = pos
+	}
+
+	return input, resources, nil
+}
+
 // New returns a new frame system service for the given robot.
 func New(ctx context.Context, r robot.Robot, logger golog.Logger) Service {
 	return &frameSystemService{
@@ -44,12 +84,11 @@ func New(ctx context.Context, r robot.Robot, logger golog.Logger) Service {
 // the frame system service collects all the relevant parts that make up the frame system from the robot
 // configs, and the remote robot configs.
 type frameSystemService struct {
-	mu           sync.RWMutex
-	r            robot.Robot
-	localParts   framesystemparts.Parts             // gotten from the local robot's config.Config
-	offsetParts  map[string]*config.FrameSystemPart // gotten from local robot's config.Remote
-	remotePrefix map[string]bool                    // gotten from local robot's config.Remote
-	logger       golog.Logger
+	mu          sync.RWMutex
+	r           robot.Robot
+	localParts  framesystemparts.Parts             // gotten from the local robot's config.Config
+	offsetParts map[string]*config.FrameSystemPart // gotten from local robot's config.Remote
+	logger      golog.Logger
 }
 
 // Update will rebuild the frame system from the newly updated robot.
@@ -155,7 +194,12 @@ func (svc *frameSystemService) TransformPose(
 		input[name] = pos
 	}
 
-	return fs.TransformPose(input, pose.Pose(), pose.FrameName(), dst)
+	tf, err := fs.Transform(input, pose, dst)
+	if err != nil {
+		return nil, err
+	}
+	pose, _ = tf.(*referenceframe.PoseInFrame)
+	return pose, nil
 }
 
 // updateLocalParts collects the physical parts of the robot that may have frame info,
@@ -167,7 +211,7 @@ func (svc *frameSystemService) updateLocalParts(ctx context.Context) error {
 	seen := make(map[string]bool)
 	local, ok := svc.r.(robot.LocalRobot)
 	if !ok {
-		return utils.NewUnimplementedInterfaceError("robot.LocalRobot", svc.r)
+		return robot.NewUnimplementedLocalInterfaceError(svc.r)
 	}
 	cfg, err := local.Config(ctx) // Eventually there will be another function that gathers the frame system config
 	if err != nil {
@@ -176,9 +220,6 @@ func (svc *frameSystemService) updateLocalParts(ctx context.Context) error {
 	for _, c := range cfg.Components {
 		if c.Frame == nil { // no Frame means dont include in frame system.
 			continue
-		}
-		if _, ok := seen[c.Name]; ok {
-			return errors.Errorf("more than one component with name %q in config file", c.Name)
 		}
 		if c.Name == referenceframe.World {
 			return errors.Errorf("cannot give frame system part the name %s", referenceframe.World)
@@ -203,7 +244,7 @@ func (svc *frameSystemService) updateOffsetParts(ctx context.Context) error {
 	defer span.End()
 	local, ok := svc.r.(robot.LocalRobot)
 	if !ok {
-		return utils.NewUnimplementedInterfaceError("robot.LocalRobot", svc.r)
+		return robot.NewUnimplementedLocalInterfaceError(svc.r)
 	}
 	conf, err := local.Config(ctx)
 	if err != nil {
@@ -211,7 +252,6 @@ func (svc *frameSystemService) updateOffsetParts(ctx context.Context) error {
 	}
 	remoteNames := local.RemoteNames()
 	offsetParts := make(map[string]*config.FrameSystemPart)
-	remotePrefix := make(map[string]bool)
 	for _, remoteName := range remoteNames {
 		rConf, err := getRemoteRobotConfig(remoteName, conf)
 		if err != nil {
@@ -228,10 +268,8 @@ func (svc *frameSystemService) updateOffsetParts(ctx context.Context) error {
 			FrameConfig: rConf.Frame,
 		}
 		offsetParts[remoteName] = connection
-		remotePrefix[remoteName] = rConf.Prefix
 	}
 	svc.offsetParts = offsetParts
-	svc.remotePrefix = remotePrefix
 	return nil
 }
 
@@ -255,7 +293,7 @@ func (svc *frameSystemService) updateRemoteParts(ctx context.Context) (map[strin
 			return nil, errors.Wrapf(err, "remote %s", remoteName)
 		}
 		connectionName := remoteName + "_" + referenceframe.World
-		rParts = framesystemparts.RenameRemoteParts(rParts, remoteName, svc.remotePrefix[remoteName], connectionName)
+		rParts = framesystemparts.RenameRemoteParts(rParts, remoteName, connectionName)
 		remoteParts[remoteName] = rParts
 	}
 	return remoteParts, nil

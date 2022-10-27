@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"image"
 	"os"
-	"path/filepath"
 
+	"github.com/edaniels/golog"
 	"github.com/golang/geo/r2"
 	"go.viam.com/utils"
 	"gonum.org/v1/gonum/mat"
@@ -19,26 +19,25 @@ import (
 type MotionEstimationConfig struct {
 	KeyPointCfg       *keypoints.ORBConfig               `json:"kps"`
 	MatchingCfg       *keypoints.MatchingConfig          `json:"matching"`
-	CamIntrinsics     *transform.PinholeCameraIntrinsics `json:"cam_intrinsics"`
+	CamIntrinsics     *transform.PinholeCameraIntrinsics `json:"intrinsic_parameters"`
 	ScaleEstimatorCfg *ScaleEstimatorConfig              `json:"scale_estimator"`
-	CamHeightGround   float64                            `json:"cam_height_ground"`
+	CamHeightGround   float64                            `json:"cam_height_ground_m"`
 }
 
 // LoadMotionEstimationConfig loads a motion estimation configuration from a json file.
-func LoadMotionEstimationConfig(path string) *MotionEstimationConfig {
+func LoadMotionEstimationConfig(path string) (*MotionEstimationConfig, error) {
 	var config MotionEstimationConfig
-	filePath := filepath.Clean(path)
-	configFile, err := os.Open(filePath)
+	configFile, err := os.Open(path) //nolint:gosec
 	defer utils.UncheckedErrorFunc(configFile.Close)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	jsonParser := json.NewDecoder(configFile)
 	err = jsonParser.Decode(&config)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return &config
+	return &config, nil
 }
 
 // Motion3D contains the estimated 3D rotation and translation from 2 frames.
@@ -56,26 +55,34 @@ func NewMotion3DFromRotationTranslation(rotation, translation *mat.Dense) *Motio
 }
 
 // EstimateMotionFrom2Frames estimates the 3D motion of the camera between frame img1 and frame img2.
-func EstimateMotionFrom2Frames(img1, img2 *rimage.Image, cfg *MotionEstimationConfig) (*Motion3D, error) {
+func EstimateMotionFrom2Frames(img1, img2 *rimage.Image, cfg *MotionEstimationConfig, logger golog.Logger,
+) (*Motion3D, image.Image, error) {
 	// Convert both images to gray
 	im1 := rimage.MakeGray(img1)
 	im2 := rimage.MakeGray(img2)
+	sampleMethod := cfg.KeyPointCfg.BRIEFConf.Sampling
+	sampleN := cfg.KeyPointCfg.BRIEFConf.N
+	samplePatchSize := cfg.KeyPointCfg.BRIEFConf.PatchSize
+	samplePoints := keypoints.GenerateSamplePairs(sampleMethod, sampleN, samplePatchSize)
 	// compute keypoints
-	orb1, kps1, err := keypoints.ComputeORBKeypoints(im1, cfg.KeyPointCfg)
+	orb1, kps1, err := keypoints.ComputeORBKeypoints(im1, samplePoints, cfg.KeyPointCfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	orb2, kps2, err := keypoints.ComputeORBKeypoints(im2, cfg.KeyPointCfg)
+	orb2, kps2, err := keypoints.ComputeORBKeypoints(im2, samplePoints, cfg.KeyPointCfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	// match keypoints
-	matches := keypoints.MatchKeypoints(orb1, orb2, cfg.MatchingCfg)
+	// match descriptors
+	matches := keypoints.MatchDescriptors(orb1, orb2, cfg.MatchingCfg, logger)
 	// get 2 sets of matching keypoints
 	matchedKps1, matchedKps2, err := keypoints.GetMatchingKeyPoints(matches, kps1, kps2)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	matchedOrbPts1 := keypoints.PlotKeypoints(im1, matchedKps1)
+	matchedOrbPts2 := keypoints.PlotKeypoints(im2, matchedKps2)
+	matchedLines := keypoints.PlotMatchedLines(matchedOrbPts1, matchedOrbPts2, matchedKps1, matchedKps2, true)
 	// get intrinsics matrix
 	k := cfg.CamIntrinsics.GetCameraMatrix()
 
@@ -84,13 +91,13 @@ func EstimateMotionFrom2Frames(img1, img2 *rimage.Image, cfg *MotionEstimationCo
 	matchedKps2Float := convertImagePointSliceToFloatPointSlice(matchedKps2)
 	pose, err := transform.EstimateNewPose(matchedKps1Float, matchedKps2Float, k)
 	if err != nil {
-		return nil, err
+		return nil, matchedLines, err
 	}
 
 	// Rescale motion
 	estimatedCamHeight, err := EstimateCameraHeight(matchedKps1Float, matchedKps2Float, pose, cfg.ScaleEstimatorCfg, cfg.CamIntrinsics)
 	if err != nil {
-		return nil, err
+		return nil, matchedLines, err
 	}
 	scale := cfg.CamHeightGround / estimatedCamHeight
 
@@ -100,7 +107,7 @@ func EstimateMotionFrom2Frames(img1, img2 *rimage.Image, cfg *MotionEstimationCo
 	return &Motion3D{
 		Rotation:    pose.Rotation,
 		Translation: &rescaledTranslation,
-	}, nil
+	}, matchedLines, nil
 }
 
 // convertImagePointSliceToFloatPointSlice is a helper to convert slice of image.Point to a slice of r2.Point.

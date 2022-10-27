@@ -14,6 +14,7 @@ import (
 	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
 	"go.uber.org/multierr"
+	pb "go.viam.com/api/component/arm/v1"
 
 	spatial "go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/utils"
@@ -64,8 +65,8 @@ func RestrictedRandomFrameInputs(m Frame, rSeed *rand.Rand, lim float64) []Input
 			u = 999
 		}
 
-		jRange := math.Abs(u - l)
-		pos = append(pos, Input{lim * (rSeed.Float64()*jRange + l)})
+		span := u - l
+		pos = append(pos, Input{lim*span*rSeed.Float64() + l + (span * (1 - lim) / 2)})
 	}
 	return pos
 }
@@ -88,9 +89,7 @@ func RandomFrameInputs(m Frame, rSeed *rand.Rand) []Input {
 		if u == math.Inf(1) {
 			u = 999
 		}
-
-		jRange := math.Abs(u - l)
-		pos = append(pos, Input{rSeed.Float64()*jRange + l})
+		pos = append(pos, Input{rSeed.Float64()*(u-l) + l})
 	}
 	return pos
 }
@@ -105,7 +104,7 @@ type Frame interface {
 
 	// Geometries returns a map between names and geometries for the reference frame and any intermediate frames that
 	// may be defined for it, e.g. links in an arm. If a frame does not have a geometryCreator it will not be added into the map
-	Geometries([]Input) (map[string]spatial.Geometry, error)
+	Geometries([]Input) (*GeometriesInFrame, error)
 
 	// DoF will return a slice with length equal to the number of joints/degrees of freedom.
 	// Each element describes the min and max movement limit of that joint/degree of freedom.
@@ -116,13 +115,53 @@ type Frame interface {
 	// differences should just be things like floating point inprecision
 	AlmostEquals(otherFrame Frame) bool
 
+	// InputFromProtobuf does there correct thing for this frame to convert protobuf units (degrees/mm) to input units (radians/mm)
+	InputFromProtobuf(*pb.JointPositions) []Input
+
+	// ProtobufFromInput does there correct thing for this frame to convert input units (radians/mm) to protobuf units (degrees/mm)
+	ProtobufFromInput([]Input) *pb.JointPositions
+
 	json.Marshaler
+}
+
+// baseFrame contains all the data and methods common to all frames, notably it does not implement the Frame interface itself.
+type baseFrame struct {
+	name   string
+	limits []Limit
+}
+
+// Name returns the name of the referenceframe.
+func (bf *baseFrame) Name() string {
+	return bf.name
+}
+
+// DoF will return a slice with length equal to the number of joints/degrees of freedom.
+func (bf *baseFrame) DoF() []Limit {
+	return bf.limits
+}
+
+// validInputs checks whether the given array of joint positions violates any joint limits.
+func (bf *baseFrame) validInputs(inputs []Input) error {
+	var errAll error
+	if len(inputs) != len(bf.limits) {
+		return NewIncorrectInputLengthError(len(inputs), len(bf.limits))
+	}
+	for i := 0; i < len(bf.limits); i++ {
+		if inputs[i].Value < bf.limits[i].Min || inputs[i].Value > bf.limits[i].Max {
+			multierr.AppendInto(&errAll, fmt.Errorf("%.5f %s %.5f", inputs[i].Value, OOBErrString, bf.limits[i]))
+		}
+	}
+	return errAll
+}
+
+func (bf *baseFrame) AlmostEquals(other *baseFrame) bool {
+	return bf.name == other.name && limitsAlmostEqual(bf.limits, other.limits)
 }
 
 // a static Frame is a simple corrdinate system that encodes a fixed translation and rotation
 // from the current Frame to the parent referenceframe.
 type staticFrame struct {
-	name            string
+	*baseFrame
 	transform       spatial.Pose
 	geometryCreator spatial.GeometryCreator
 }
@@ -133,12 +172,12 @@ func NewStaticFrame(name string, pose spatial.Pose) (Frame, error) {
 	if pose == nil {
 		return nil, errors.New("pose is not allowed to be nil")
 	}
-	return &staticFrame{name, pose, nil}, nil
+	return &staticFrame{&baseFrame{name, []Limit{}}, pose, nil}, nil
 }
 
 // NewZeroStaticFrame creates a frame with no translation or orientation changes.
 func NewZeroStaticFrame(name string) Frame {
-	return &staticFrame{name, spatial.NewZeroPose(), nil}
+	return &staticFrame{&baseFrame{name, []Limit{}}, spatial.NewZeroPose(), nil}
 }
 
 // NewStaticFrameWithGeometry creates a frame given a pose relative to its parent.  The pose is fixed for all time.
@@ -147,7 +186,7 @@ func NewStaticFrameWithGeometry(name string, pose spatial.Pose, geometryCreator 
 	if pose == nil {
 		return nil, errors.New("pose is not allowed to be nil")
 	}
-	return &staticFrame{name, pose, geometryCreator}, nil
+	return &staticFrame{&baseFrame{name, []Limit{}}, pose, geometryCreator}, nil
 }
 
 // NewStaticFrameFromFrame creates a frame given a pose relative to its parent.  The pose is fixed for all time.
@@ -156,16 +195,16 @@ func NewStaticFrameFromFrame(frame Frame, pose spatial.Pose) (Frame, error) {
 	if pose == nil {
 		return nil, errors.New("pose is not allowed to be nil")
 	}
-	if tf, ok := frame.(*translationalFrame); ok {
-		return &staticFrame{tf.Name(), pose, tf.geometryCreator}, nil
+	switch f := frame.(type) {
+	case *staticFrame:
+		return NewStaticFrameWithGeometry(frame.Name(), pose, f.geometryCreator)
+	case *translationalFrame:
+		return NewStaticFrameWithGeometry(frame.Name(), pose, f.geometryCreator)
+	case *mobile2DFrame:
+		return NewStaticFrameWithGeometry(frame.Name(), pose, f.geometryCreator)
+	default:
+		return NewStaticFrame(frame.Name(), pose)
 	}
-	if tf, ok := frame.(*staticFrame); ok {
-		return &staticFrame{tf.Name(), pose, tf.geometryCreator}, nil
-	}
-	if tf, ok := frame.(*mobile2DFrame); ok {
-		return &staticFrame{tf.Name(), pose, tf.geometryCreator}, nil
-	}
-	return &staticFrame{frame.Name(), pose, nil}, nil
 }
 
 // FrameFromPoint creates a new Frame from a 3D point.
@@ -173,36 +212,35 @@ func FrameFromPoint(name string, point r3.Vector) (Frame, error) {
 	return NewStaticFrame(name, spatial.NewPoseFromPoint(point))
 }
 
-// Name is the name of the referenceframe.
-func (sf *staticFrame) Name() string {
-	return sf.name
-}
-
 // Transform returns the pose associated with this static referenceframe.
 func (sf *staticFrame) Transform(input []Input) (spatial.Pose, error) {
 	if len(input) != 0 {
-		return nil, fmt.Errorf("given input length %q does not match frame DoF 0", len(input))
+		return nil, NewIncorrectInputLengthError(len(input), 0)
 	}
 	return sf.transform, nil
 }
 
+// InputFromProtobuf converts pb.JointPosition to inputs.
+func (sf *staticFrame) InputFromProtobuf(jp *pb.JointPositions) []Input {
+	return []Input{}
+}
+
+// ProtobufFromInput converts inputs to pb.JointPosition.
+func (sf *staticFrame) ProtobufFromInput(input []Input) *pb.JointPositions {
+	return &pb.JointPositions{}
+}
+
 // Geometries returns an object representing the 3D space associeted with the staticFrame.
-func (sf *staticFrame) Geometries(input []Input) (map[string]spatial.Geometry, error) {
+func (sf *staticFrame) Geometries(input []Input) (*GeometriesInFrame, error) {
 	if sf.geometryCreator == nil {
 		return nil, fmt.Errorf("frame of type %T has nil geometryCreator", sf)
 	}
-	pose, err := sf.Transform(input)
-	if pose == nil || (err != nil && !strings.Contains(err.Error(), OOBErrString)) {
-		return nil, err
+	if len(input) != 0 {
+		return nil, NewIncorrectInputLengthError(len(input), 0)
 	}
 	m := make(map[string]spatial.Geometry)
-	m[sf.Name()] = sf.geometryCreator.NewGeometry(pose)
-	return m, err
-}
-
-// DoF are the degrees of freedom of the transform. In the staticFrame, it is always 0.
-func (sf *staticFrame) DoF() []Limit {
-	return []Limit{}
+	m[sf.Name()] = sf.geometryCreator.NewGeometry(spatial.NewZeroPose())
+	return NewGeometriesInFrame(sf.name, m), nil
 }
 
 func (sf *staticFrame) MarshalJSON() ([]byte, error) {
@@ -220,14 +258,13 @@ func (sf *staticFrame) MarshalJSON() ([]byte, error) {
 
 func (sf *staticFrame) AlmostEquals(otherFrame Frame) bool {
 	other, ok := otherFrame.(*staticFrame)
-	return ok && sf.name == other.name && spatial.PoseAlmostEqual(sf.transform, other.transform)
+	return ok && sf.baseFrame.AlmostEquals(other.baseFrame) && spatial.PoseAlmostEqual(sf.transform, other.transform)
 }
 
 // a prismatic Frame is a frame that can translate without rotation in any/all of the X, Y, and Z directions.
 type translationalFrame struct {
-	name            string
+	*baseFrame
 	transAxis       r3.Vector
-	limit           []Limit
 	geometryCreator spatial.GeometryCreator
 }
 
@@ -242,30 +279,43 @@ func NewTranslationalFrameWithGeometry(name string, axis r3.Vector, limit Limit,
 	if spatial.R3VectorAlmostEqual(r3.Vector{}, axis, 1e-8) {
 		return nil, errors.New("cannot use zero vector as translation axis")
 	}
-	return &translationalFrame{name: name, transAxis: axis.Normalize(), limit: []Limit{limit}, geometryCreator: geometryCreator}, nil
-}
-
-// Name is the name of the frame.
-func (pf *translationalFrame) Name() string {
-	return pf.name
+	return &translationalFrame{
+		baseFrame:       &baseFrame{name: name, limits: []Limit{limit}},
+		transAxis:       axis.Normalize(),
+		geometryCreator: geometryCreator,
+	}, nil
 }
 
 // Transform returns a pose translated by the amount specified in the inputs.
 func (pf *translationalFrame) Transform(input []Input) (spatial.Pose, error) {
-	var err error
-	if len(input) != 1 {
-		return nil, fmt.Errorf("given input length %d does not match frame DoF %d", len(input), 1)
-	}
-
+	err := pf.validInputs(input)
 	// We allow out-of-bounds calculations, but will return a non-nil error
-	if input[0].Value < pf.limit[0].Min || input[0].Value > pf.limit[0].Max {
-		err = fmt.Errorf("%.5f %s %v", input[0].Value, OOBErrString, pf.limit[0])
+	if err != nil && !strings.Contains(err.Error(), OOBErrString) {
+		return nil, err
 	}
 	return spatial.NewPoseFromPoint(pf.transAxis.Mul(input[0].Value)), err
 }
 
+// InputFromProtobuf converts pb.JointPosition to inputs.
+func (pf *translationalFrame) InputFromProtobuf(jp *pb.JointPositions) []Input {
+	n := make([]Input, len(jp.Values))
+	for idx, d := range jp.Values {
+		n[idx] = Input{d}
+	}
+	return n
+}
+
+// ProtobufFromInput converts inputs to pb.JointPosition.
+func (pf *translationalFrame) ProtobufFromInput(input []Input) *pb.JointPositions {
+	n := make([]float64, len(input))
+	for idx, a := range input {
+		n[idx] = a.Value
+	}
+	return &pb.JointPositions{Values: n}
+}
+
 // Geometries returns an object representing the 3D space associeted with the translationalFrame.
-func (pf *translationalFrame) Geometries(input []Input) (map[string]spatial.Geometry, error) {
+func (pf *translationalFrame) Geometries(input []Input) (*GeometriesInFrame, error) {
 	if pf.geometryCreator == nil {
 		return nil, fmt.Errorf("frame of type %T has nil geometryCreator", pf)
 	}
@@ -275,12 +325,7 @@ func (pf *translationalFrame) Geometries(input []Input) (map[string]spatial.Geom
 	}
 	m := make(map[string]spatial.Geometry)
 	m[pf.Name()] = pf.geometryCreator.NewGeometry(pose)
-	return m, err
-}
-
-// DoF are the degrees of freedom of the transform.
-func (pf *translationalFrame) DoF() []Limit {
-	return pf.limit
+	return NewGeometriesInFrame(pf.name, m), err
 }
 
 func (pf *translationalFrame) MarshalJSON() ([]byte, error) {
@@ -288,22 +333,19 @@ func (pf *translationalFrame) MarshalJSON() ([]byte, error) {
 		"type":      "translational",
 		"name":      pf.name,
 		"transAxis": pf.transAxis,
-		"limit":     pf.limit,
+		"limit":     pf.limits,
 	}
 	return json.Marshal(m)
 }
 
 func (pf *translationalFrame) AlmostEquals(otherFrame Frame) bool {
 	other, ok := otherFrame.(*translationalFrame)
-	return ok && pf.name == other.name &&
-		spatial.R3VectorAlmostEqual(pf.transAxis, other.transAxis, 1e-8) &&
-		limitsAlmostEqual(pf.DoF(), other.DoF())
+	return ok && pf.baseFrame.AlmostEquals(other.baseFrame) && spatial.R3VectorAlmostEqual(pf.transAxis, other.transAxis, 1e-8)
 }
 
 type rotationalFrame struct {
-	name    string
+	*baseFrame
 	rotAxis r3.Vector
-	limit   []Limit
 }
 
 // NewRotationalFrame creates a new rotationalFrame struct.
@@ -311,36 +353,45 @@ type rotationalFrame struct {
 func NewRotationalFrame(name string, axis spatial.R4AA, limit Limit) (Frame, error) {
 	axis.Normalize()
 	return &rotationalFrame{
-		name:    name,
-		rotAxis: r3.Vector{axis.RX, axis.RY, axis.RZ},
-		limit:   []Limit{limit},
+		baseFrame: &baseFrame{name: name, limits: []Limit{limit}},
+		rotAxis:   r3.Vector{axis.RX, axis.RY, axis.RZ},
 	}, nil
 }
 
 // Transform returns the Pose representing the frame's 6DoF motion in space. Requires a slice
 // of inputs that has length equal to the degrees of freedom of the referenceframe.
 func (rf *rotationalFrame) Transform(input []Input) (spatial.Pose, error) {
-	var err error
-	if len(input) != 1 {
-		return nil, fmt.Errorf("given input length %d does not match frame DoF 1", len(input))
-	}
+	err := rf.validInputs(input)
 	// We allow out-of-bounds calculations, but will return a non-nil error
-	if input[0].Value < rf.limit[0].Min || input[0].Value > rf.limit[0].Max {
-		err = fmt.Errorf("%.5f %s %.5f", input[0].Value, OOBErrString, rf.limit[0])
+	if err != nil && !strings.Contains(err.Error(), OOBErrString) {
+		return nil, err
 	}
 	// Create a copy of the r4aa for thread safety
 	return spatial.NewPoseFromOrientation(r3.Vector{0, 0, 0}, &spatial.R4AA{input[0].Value, rf.rotAxis.X, rf.rotAxis.Y, rf.rotAxis.Z}), err
 }
 
-// Geometries will always return (nil, nil) for rotationalFrames, as not allowing rotationalFrames to occupy geometries is a
-// design choice made for simplicity. staticFrame and translationalFrame should be used instead.
-func (rf *rotationalFrame) Geometries(input []Input) (map[string]spatial.Geometry, error) {
-	return nil, fmt.Errorf("s not implemented for type %T", rf)
+// InputFromProtobuf converts pb.JointPosition to inputs.
+func (rf *rotationalFrame) InputFromProtobuf(jp *pb.JointPositions) []Input {
+	n := make([]Input, len(jp.Values))
+	for idx, d := range jp.Values {
+		n[idx] = Input{utils.DegToRad(d)}
+	}
+	return n
 }
 
-// DoF returns the number of degrees of freedom that a joint has. This would be 1 for a standard revolute joint.
-func (rf *rotationalFrame) DoF() []Limit {
-	return rf.limit
+// ProtobufFromInput converts inputs to pb.JointPosition.
+func (rf *rotationalFrame) ProtobufFromInput(input []Input) *pb.JointPositions {
+	n := make([]float64, len(input))
+	for idx, a := range input {
+		n[idx] = utils.RadToDeg(a.Value)
+	}
+	return &pb.JointPositions{Values: n}
+}
+
+// Geometries will always return (nil, nil) for rotationalFrames, as not allowing rotationalFrames to occupy geometries is a
+// design choice made for simplicity. staticFrame and translationalFrame should be used instead.
+func (rf *rotationalFrame) Geometries(input []Input) (*GeometriesInFrame, error) {
+	return nil, fmt.Errorf("s not implemented for type %T", rf)
 }
 
 // Name returns the name of the referenceframe.
@@ -353,53 +404,59 @@ func (rf *rotationalFrame) MarshalJSON() ([]byte, error) {
 		"type":    "rotational",
 		"name":    rf.name,
 		"rotAxis": rf.rotAxis,
-		"limit":   rf.limit,
+		"limit":   rf.limits,
 	}
 	return json.Marshal(m)
 }
 
 func (rf *rotationalFrame) AlmostEquals(otherFrame Frame) bool {
 	other, ok := otherFrame.(*rotationalFrame)
-	return ok && rf.name == other.name &&
-		spatial.R3VectorAlmostEqual(rf.rotAxis, other.rotAxis, 1e-8) &&
-		limitsAlmostEqual(rf.DoF(), other.DoF())
+	return ok && rf.baseFrame.AlmostEquals(other.baseFrame) && spatial.R3VectorAlmostEqual(rf.rotAxis, other.rotAxis, 1e-8)
 }
 
 type mobile2DFrame struct {
-	name            string
-	limit           []Limit
+	*baseFrame
 	geometryCreator spatial.GeometryCreator
 }
 
 // NewMobile2DFrame instantiates a frame that can translate in the x and y dimensions and will always remain on the plane Z=0
 // This frame will have a name, limits (representing the bounds the frame is allowed to translate within) and a geometryCreator
 // defined by the arguments passed into this function.
-func NewMobile2DFrame(name string, limit []Limit, geometryCreator spatial.GeometryCreator) (Frame, error) {
-	if len(limit) != 2 {
-		return nil, fmt.Errorf("cannot create a %d dof mobile frame, only support 2 dimensions currently", len(limit))
+func NewMobile2DFrame(name string, limits []Limit, geometryCreator spatial.GeometryCreator) (Frame, error) {
+	if len(limits) != 2 {
+		return nil, fmt.Errorf("cannot create a %d dof mobile frame, only support 2 dimensions currently", len(limits))
 	}
-	return &mobile2DFrame{name: name, limit: limit, geometryCreator: geometryCreator}, nil
-}
-
-func (mf *mobile2DFrame) Name() string {
-	return mf.name
+	return &mobile2DFrame{baseFrame: &baseFrame{name: name, limits: limits}, geometryCreator: geometryCreator}, nil
 }
 
 func (mf *mobile2DFrame) Transform(input []Input) (spatial.Pose, error) {
-	var errAll error
-	if len(input) != len(mf.limit) {
-		return nil, fmt.Errorf("given input length %d does not match frame DoF %d", len(input), len(mf.limit))
-	}
+	err := mf.validInputs(input)
 	// We allow out-of-bounds calculations, but will return a non-nil error
-	for i, lim := range mf.limit {
-		if input[i].Value < lim.Min || input[i].Value > lim.Max {
-			multierr.AppendInto(&errAll, fmt.Errorf("%.5f input out of rev frame bounds %.5f", input[i].Value, lim))
-		}
+	if err != nil && !strings.Contains(err.Error(), OOBErrString) {
+		return nil, err
 	}
-	return spatial.NewPoseFromPoint(r3.Vector{input[0].Value, input[1].Value, 0}), errAll
+	return spatial.NewPoseFromPoint(r3.Vector{input[0].Value, input[1].Value, 0}), err
 }
 
-func (mf *mobile2DFrame) Geometries(input []Input) (map[string]spatial.Geometry, error) {
+// InputFromProtobuf converts pb.JointPosition to inputs.
+func (mf *mobile2DFrame) InputFromProtobuf(jp *pb.JointPositions) []Input {
+	n := make([]Input, len(jp.Values))
+	for idx, d := range jp.Values {
+		n[idx] = Input{d}
+	}
+	return n
+}
+
+// ProtobufFromInput converts inputs to pb.JointPosition.
+func (mf *mobile2DFrame) ProtobufFromInput(input []Input) *pb.JointPositions {
+	n := make([]float64, len(input))
+	for idx, a := range input {
+		n[idx] = a.Value
+	}
+	return &pb.JointPositions{Values: n}
+}
+
+func (mf *mobile2DFrame) Geometries(input []Input) (*GeometriesInFrame, error) {
 	if mf.geometryCreator == nil {
 		return nil, fmt.Errorf("frame of type %T has nil geometryCreator", mf)
 	}
@@ -409,22 +466,18 @@ func (mf *mobile2DFrame) Geometries(input []Input) (map[string]spatial.Geometry,
 	}
 	m := make(map[string]spatial.Geometry)
 	m[mf.Name()] = mf.geometryCreator.NewGeometry(pose)
-	return m, err
-}
-
-func (mf *mobile2DFrame) DoF() []Limit {
-	return mf.limit
+	return NewGeometriesInFrame(mf.name, m), err
 }
 
 func (mf *mobile2DFrame) MarshalJSON() ([]byte, error) {
 	return json.Marshal(FrameMapConfig{
 		"type":  "rotational",
 		"name":  mf.name,
-		"limit": mf.limit,
+		"limit": mf.limits,
 	})
 }
 
 func (mf *mobile2DFrame) AlmostEquals(otherFrame Frame) bool {
 	other, ok := otherFrame.(*rotationalFrame)
-	return ok && mf.name == other.name && limitsAlmostEqual(mf.DoF(), other.DoF())
+	return ok && mf.baseFrame.AlmostEquals(other.baseFrame)
 }

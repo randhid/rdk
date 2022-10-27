@@ -1,24 +1,24 @@
 package config
 
 import (
-	"io/ioutil"
 	"math"
+	"os"
 	"testing"
 
 	"github.com/edaniels/golog"
 	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
+	commonpb "go.viam.com/api/common/v1"
+	robotpb "go.viam.com/api/robot/v1"
 	"go.viam.com/test"
 
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	robotpb "go.viam.com/rdk/proto/api/robot/v1"
 	"go.viam.com/rdk/referenceframe"
 	spatial "go.viam.com/rdk/spatialmath"
 	rdkutils "go.viam.com/rdk/utils"
 )
 
 func TestFrameModelPart(t *testing.T) {
-	jsonData, err := ioutil.ReadFile(rdkutils.ResolveFile("config/data/model_frame.json"))
+	jsonData, err := os.ReadFile(rdkutils.ResolveFile("config/data/model_frame.json"))
 	test.That(t, err, test.ShouldBeNil)
 	model, err := referenceframe.UnmarshalModelJSON(jsonData, "")
 	test.That(t, err, test.ShouldBeNil)
@@ -64,7 +64,7 @@ func TestFrameModelPart(t *testing.T) {
 	// fully specified part
 	part = &FrameSystemPart{
 		Name:        "test",
-		FrameConfig: &Frame{Parent: "world", Translation: spatial.TranslationConfig{1, 2, 3}, Orientation: spatial.NewZeroOrientation()},
+		FrameConfig: &Frame{Parent: "world", Translation: r3.Vector{1, 2, 3}, Orientation: spatial.NewZeroOrientation()},
 		ModelFrame:  model,
 	}
 	result, err = part.ToProtobuf()
@@ -98,7 +98,7 @@ func TestFrameModelPart(t *testing.T) {
 
 func TestFramesFromPart(t *testing.T) {
 	logger := golog.NewTestLogger(t)
-	jsonData, err := ioutil.ReadFile(rdkutils.ResolveFile("config/data/model_frame.json"))
+	jsonData, err := os.ReadFile(rdkutils.ResolveFile("config/data/model_frame.json"))
 	test.That(t, err, test.ShouldBeNil)
 	model, err := referenceframe.UnmarshalModelJSON(jsonData, "")
 	test.That(t, err, test.ShouldBeNil)
@@ -117,23 +117,23 @@ func TestFramesFromPart(t *testing.T) {
 		FrameConfig: &Frame{Parent: "world"},
 		ModelFrame:  nil,
 	}
-	modelFrame, offsetFrame, err := CreateFramesFromPart(part, logger)
+	modelFrame, originFrame, err := CreateFramesFromPart(part, logger)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, modelFrame, test.ShouldResemble, referenceframe.NewZeroStaticFrame(part.Name))
-	test.That(t, offsetFrame, test.ShouldResemble, referenceframe.NewZeroStaticFrame(part.Name+"_offset"))
+	test.That(t, originFrame, test.ShouldResemble, referenceframe.NewZeroStaticFrame(part.Name+"_origin"))
 
 	// fully specified part
 	part = &FrameSystemPart{
 		Name:        "test",
-		FrameConfig: &Frame{Parent: "world", Translation: spatial.TranslationConfig{1, 2, 3}, Orientation: spatial.NewZeroOrientation()},
+		FrameConfig: &Frame{Parent: "world", Translation: r3.Vector{1, 2, 3}, Orientation: spatial.NewZeroOrientation()},
 		ModelFrame:  model,
 	}
-	modelFrame, offsetFrame, err = CreateFramesFromPart(part, logger)
+	modelFrame, originFrame, err = CreateFramesFromPart(part, logger)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, modelFrame.Name(), test.ShouldEqual, part.Name)
 	test.That(t, modelFrame.DoF(), test.ShouldResemble, part.ModelFrame.DoF())
-	test.That(t, offsetFrame.Name(), test.ShouldEqual, part.Name+"_offset")
-	test.That(t, offsetFrame.DoF(), test.ShouldHaveLength, 0)
+	test.That(t, originFrame.Name(), test.ShouldEqual, part.Name+"_origin")
+	test.That(t, originFrame.DoF(), test.ShouldHaveLength, 0)
 }
 
 func TestConvertTransformProtobufToFrameSystemPart(t *testing.T) {
@@ -161,10 +161,9 @@ func TestConvertTransformProtobufToFrameSystemPart(t *testing.T) {
 		test.That(t, part, test.ShouldBeNil)
 	})
 	t.Run("converts to frame system part", func(t *testing.T) {
-		testPose := spatial.NewPoseFromAxisAngle(
+		testPose := spatial.NewPoseFromOrientation(
 			r3.Vector{X: 1., Y: 2., Z: 3.},
-			r3.Vector{X: 0., Y: 1., Z: 0.},
-			math.Pi/2,
+			&spatial.R4AA{Theta: math.Pi / 2, RX: 0, RY: 1, RZ: 0},
 		)
 		transform := &commonpb.Transform{
 			ReferenceFrame: "child",

@@ -1,8 +1,10 @@
+//go:build !arm
+
 package inference
 
 import (
-	"io/ioutil"
 	"log"
+	"os"
 	"runtime"
 
 	tflite "github.com/mattn/go-tflite"
@@ -126,12 +128,22 @@ func (loader TFLiteModelLoader) Load(modelPath string) (*TFLiteStruct, error) {
 	return modelStruct, nil
 }
 
+// InTensorType is a wrapper around a string that details the allowed input tensor types.
+type InTensorType string
+
+// UInt8 and Float32 are the currently supported input tensor types.
+const (
+	UInt8   = InTensorType("UInt8")
+	Float32 = InTensorType("Float32")
+)
+
 // TFLiteInfo holds information about a model that are useful for creating input tensors bytes.
 type TFLiteInfo struct {
 	InputHeight       int
 	InputWidth        int
 	InputChannels     int
-	InputTensorType   string
+	InputShape        []int
+	InputTensorType   InTensorType
 	InputTensorCount  int
 	OutputTensorCount int
 	OutputTensorTypes []string
@@ -151,7 +163,8 @@ func getInfo(inter Interpreter) *TFLiteInfo {
 		InputHeight:       input.Dim(1),
 		InputWidth:        input.Dim(2),
 		InputChannels:     input.Dim(3),
-		InputTensorType:   input.Type().String(),
+		InputShape:        input.Shape(),
+		InputTensorType:   InTensorType(input.Type().String()),
 		InputTensorCount:  inter.GetInputTensorCount(),
 		OutputTensorCount: numOut,
 		OutputTensorTypes: outTypes,
@@ -213,8 +226,8 @@ func (model *TFLiteStruct) Infer(inputTensor interface{}) ([]interface{}, error)
 	return output, nil
 }
 
-// GetMetadata provides the metadata information based on the model flatbuffer file.
-func (model *TFLiteStruct) GetMetadata() (*metadata.ModelMetadataT, error) {
+// Metadata provides the metadata information based on the model flatbuffer file.
+func (model *TFLiteStruct) Metadata() (*metadata.ModelMetadataT, error) {
 	b, err := getTFLiteMetadataBytes(model.modelPath)
 	if err != nil {
 		return nil, err
@@ -228,7 +241,7 @@ func (model *TFLiteStruct) GetMetadata() (*metadata.ModelMetadataT, error) {
 // getTFLiteMetadataBytes takes a model path of a tflite file and extracts the metadata buffer from the entire model.
 func getTFLiteMetadataBytes(modelPath string) ([]byte, error) {
 	//nolint:gosec
-	buf, err := ioutil.ReadFile(modelPath)
+	buf, err := os.ReadFile(modelPath)
 	if err != nil {
 		return nil, err
 	}
@@ -269,10 +282,11 @@ func getTFLiteMetadataAsStruct(metaBytes []byte) *metadata.ModelMetadataT {
 }
 
 // Close should be called at the end of using the interpreter to delete related models and interpreters.
-func (model *TFLiteStruct) Close() {
+func (model *TFLiteStruct) Close() error {
 	model.model.Delete()
 	model.interpreterOptions.Delete()
 	model.interpreter.Delete()
+	return nil
 }
 
 // getInterpreter conforms a *tflite.Interpreter to the Interpreter interface.

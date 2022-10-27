@@ -1,15 +1,22 @@
-// protoutils are a collection of util methods for using proto in rdk
+// Package protoutils are a collection of util methods for using proto in rdk
 package protoutils
 
 import (
 	"fmt"
-	"google.golang.org/protobuf/types/known/structpb"
 	"reflect"
+	"strconv"
 	"strings"
 
+	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
+	commonpb "go.viam.com/api/common/v1"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
 	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/spatialmath"
 )
 
 // ResourceNameToProto converts a resource.Name to its proto counterpart.
@@ -18,7 +25,7 @@ func ResourceNameToProto(name resource.Name) *commonpb.ResourceName {
 		Namespace: string(name.Namespace),
 		Type:      string(name.ResourceType),
 		Subtype:   string(name.ResourceSubtype),
-		Name:      name.Name,
+		Name:      name.ShortName(),
 	}
 }
 
@@ -55,6 +62,11 @@ func InterfaceToMap(data interface{}) (map[string]interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
+	case reflect.Array, reflect.Bool, reflect.Chan, reflect.Complex128, reflect.Complex64, reflect.Float32,
+		reflect.Float64, reflect.Func, reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int8,
+		reflect.Interface, reflect.Invalid, reflect.Pointer, reflect.Slice, reflect.String, reflect.Uint,
+		reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint8, reflect.Uintptr, reflect.UnsafePointer:
+		fallthrough
 	default:
 		return nil, errors.Errorf("data of type %T and kind %s not a struct or a map-like object", data, t.Kind().String())
 	}
@@ -76,11 +88,19 @@ func StructToStructPb(i interface{}) (*structpb.Struct, error) {
 	return ret, nil
 }
 
+// takes a go type and tries to make it a better type for converting to grpc.
 func toInterface(data interface{}) (interface{}, error) {
+	if data == nil {
+		return data, nil
+	}
+
 	t := reflect.TypeOf(data)
+	v := reflect.ValueOf(data)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
+		v = reflect.Indirect(v)
 	}
+
 	var newData interface{}
 	var err error
 	switch t.Kind() {
@@ -100,11 +120,15 @@ func toInterface(data interface{}) (interface{}, error) {
 			return nil, err
 		}
 	case reflect.String:
-		newData = reflect.ValueOf(data).String()
+		newData = v.String()
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		newData = reflect.ValueOf(data).Uint()
+		newData = v.Uint()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		newData = reflect.ValueOf(data).Int()
+		newData = v.Int()
+	case reflect.Array, reflect.Bool, reflect.Chan, reflect.Complex128, reflect.Complex64, reflect.Float32,
+		reflect.Float64, reflect.Func, reflect.Interface, reflect.Invalid, reflect.Pointer,
+		reflect.Uintptr, reflect.UnsafePointer:
+		fallthrough
 	default:
 		newData = data
 	}
@@ -125,11 +149,15 @@ func isEmptyValue(v reflect.Value) bool {
 		return v.Float() == 0
 	case reflect.Interface, reflect.Ptr:
 		return v.IsNil()
+	case reflect.Chan, reflect.Complex128, reflect.Complex64, reflect.Func, reflect.Invalid, reflect.Struct,
+		reflect.UnsafePointer:
+		fallthrough
+	default:
+		return false
 	}
-	return false
 }
 
-// structToMap attempts to coerce a struct into a form acceptable by grpc. Ignores omitempty tags
+// structToMap attempts to coerce a struct into a form acceptable by grpc. Ignores omitempty tags.
 func structToMap(data interface{}) (map[string]interface{}, error) {
 	t := reflect.TypeOf(data)
 	if t.Kind() == reflect.Ptr {
@@ -181,7 +209,7 @@ func structToMap(data interface{}) (map[string]interface{}, error) {
 	return res, nil
 }
 
-// marshalMap attempts to coerce maps of string keys into a form acceptable by grpc
+// marshalMap attempts to coerce maps of string keys into a form acceptable by grpc.
 func marshalMap(data interface{}) (map[string]interface{}, error) {
 	s := reflect.ValueOf(data)
 	if s.Kind() != reflect.Map {
@@ -205,7 +233,7 @@ func marshalMap(data interface{}) (map[string]interface{}, error) {
 	return result, nil
 }
 
-// marshalSlice attempts to coerce list data into a form acceptable by grpc
+// marshalSlice attempts to coerce list data into a form acceptable by grpc.
 func marshalSlice(data interface{}) ([]interface{}, error) {
 	s := reflect.ValueOf(data)
 	if s.Kind() != reflect.Slice {
@@ -222,4 +250,74 @@ func marshalSlice(data interface{}) ([]interface{}, error) {
 		newList = append(newList, data)
 	}
 	return newList, nil
+}
+
+// ConvertVectorProtoToR3 TODO.
+func ConvertVectorProtoToR3(v *commonpb.Vector3) r3.Vector {
+	if v == nil {
+		return r3.Vector{}
+	}
+	return r3.Vector{X: v.X, Y: v.Y, Z: v.Z}
+}
+
+// ConvertVectorR3ToProto TODO.
+func ConvertVectorR3ToProto(v r3.Vector) *commonpb.Vector3 {
+	return &commonpb.Vector3{X: v.X, Y: v.Y, Z: v.Z}
+}
+
+// ConvertOrientationToProto TODO.
+func ConvertOrientationToProto(o spatialmath.Orientation) *commonpb.Orientation {
+	oo := &commonpb.Orientation{}
+	if o != nil {
+		ov := o.OrientationVectorDegrees()
+		oo.OX = ov.OX
+		oo.OY = ov.OY
+		oo.OZ = ov.OZ
+		oo.Theta = ov.Theta
+	}
+	return oo
+}
+
+// ConvertProtoToOrientation TODO.
+func ConvertProtoToOrientation(o *commonpb.Orientation) spatialmath.Orientation {
+	return &spatialmath.OrientationVectorDegrees{
+		OX:    o.OX,
+		OY:    o.OY,
+		OZ:    o.OZ,
+		Theta: o.Theta,
+	}
+}
+
+// ConvertStringToAnyPB takes a string and parses it to an Any pb type.
+func ConvertStringToAnyPB(str string) (*anypb.Any, error) {
+	var wrappedVal protoreflect.ProtoMessage
+	if boolVal, err := strconv.ParseBool(str); err == nil {
+		wrappedVal = wrapperspb.Bool(boolVal)
+	} else if int64Val, err := strconv.ParseInt(str, 10, 64); err == nil {
+		wrappedVal = wrapperspb.Int64(int64Val)
+	} else if uint64Val, err := strconv.ParseUint(str, 10, 64); err == nil {
+		wrappedVal = wrapperspb.UInt64(uint64Val)
+	} else if float64Val, err := strconv.ParseFloat(str, 64); err == nil {
+		wrappedVal = wrapperspb.Double(float64Val)
+	} else {
+		wrappedVal = wrapperspb.String(str)
+	}
+	anyVal, err := anypb.New(wrappedVal)
+	if err != nil {
+		return nil, err
+	}
+	return anyVal, nil
+}
+
+// ConvertStringMapToAnyPBMap takes a string map and parses each value to an Any proto type.
+func ConvertStringMapToAnyPBMap(params map[string]string) (map[string]*anypb.Any, error) {
+	methodParams := map[string]*anypb.Any{}
+	for key, paramVal := range params {
+		anyVal, err := ConvertStringToAnyPB(paramVal)
+		if err != nil {
+			return nil, err
+		}
+		methodParams[key] = anyVal
+	}
+	return methodParams, nil
 }

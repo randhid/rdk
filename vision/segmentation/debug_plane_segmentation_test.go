@@ -18,21 +18,27 @@ import (
 
 const debugPlaneSeg = "VIAM_DEBUG"
 
+var (
+	gripperComboParamsPath = utils.ResolveFile("vision/segmentation/data/gripper_combo_parameters.json")
+	intelJSONPath          = utils.ResolveFile("vision/segmentation/data/intel.json")
+	intel515ParamsPath     = utils.ResolveFile("vision/segmentation/data/intel515_parameters.json")
+)
+
 // Test finding the planes in an image with depth.
-func TestPlaneSegmentImageWithDepth(t *testing.T) {
+func TestPlaneSegmentImageAndDepthMap(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 	planeSegTest := os.Getenv(debugPlaneSeg)
 	if planeSegTest == "" {
 		t.Skipf("set environmental variable %q to run this test", debugPlaneSeg)
 	}
-	config, err := config.Read(context.Background(), utils.ResolveFile("robots/configs/intel.json"), logger)
+	config, err := config.Read(context.Background(), intelJSONPath, logger)
 	test.That(t, err, test.ShouldBeNil)
 
 	c := config.FindComponent("front")
 	test.That(t, c, test.ShouldNotBeNil)
 
-	d := rimage.NewMultipleImageTestDebugger(t, "segmentation/planes", "*.both.gz", false)
-	aligner, err := transform.NewDepthColorIntrinsicsExtrinsicsFromJSONFile(utils.ResolveFile("robots/configs/intel515_parameters.json"))
+	d := rimage.NewMultipleImageTestDebugger(t, "segmentation/planes/color", "*.png", "segmentation/planes/depth")
+	aligner, err := transform.NewDepthColorIntrinsicsExtrinsicsFromJSONFile(intel515ParamsPath)
 	test.That(t, err, test.ShouldBeNil)
 
 	err = d.Process(t, &segmentTestHelper{c.Attributes, aligner})
@@ -48,25 +54,27 @@ func (h *segmentTestHelper) Process(
 	t *testing.T,
 	pCtx *rimage.ProcessorContext,
 	fn string,
-	img image.Image,
+	img, img2 image.Image,
 	logger golog.Logger,
 ) error {
 	t.Helper()
 	var err error
-	ii := rimage.ConvertToImageWithDepth(img)
+	im := rimage.ConvertImage(img)
+	dm, err := rimage.ConvertImageToDepthMap(img2)
+	test.That(t, err, test.ShouldBeNil)
 
 	test.That(t, h.cameraParams, test.ShouldNotBeNil)
 
-	fixed, err := h.cameraParams.AlignColorAndDepthImage(ii.Color, ii.Depth)
+	fixedColor, fixedDepth, err := h.cameraParams.AlignColorAndDepthImage(im, dm)
 	test.That(t, err, test.ShouldBeNil)
-	fixed, err = rimage.PreprocessDepthMap(fixed)
+	fixedDepth, err = rimage.PreprocessDepthMap(fixedDepth, fixedColor)
 	test.That(t, err, test.ShouldBeNil)
 
-	pCtx.GotDebugImage(fixed.Overlay(), "overlay")
+	pCtx.GotDebugImage(rimage.Overlay(fixedColor, fixedDepth), "overlay")
 
-	pCtx.GotDebugImage(fixed.Depth.ToPrettyPicture(0, rimage.MaxDepth), "depth-fixed")
+	pCtx.GotDebugImage(fixedDepth.ToPrettyPicture(0, rimage.MaxDepth), "depth-fixed")
 
-	cloud, err := h.cameraParams.ImageWithDepthToPointCloud(fixed)
+	cloud, err := h.cameraParams.RGBDToPointCloud(fixedColor, fixedDepth)
 	test.That(t, err, test.ShouldBeNil)
 
 	// create an image where all the planes in the point cloud are color-coded
@@ -136,8 +144,8 @@ func TestGripperPlaneSegmentation(t *testing.T) {
 	if planeSegTest == "" {
 		t.Skipf("set environmental variable %q to run this test", debugPlaneSeg)
 	}
-	d := rimage.NewMultipleImageTestDebugger(t, "segmentation/gripper", "*.both.gz", true)
-	camera, err := transform.NewDepthColorIntrinsicsExtrinsicsFromJSONFile(utils.ResolveFile("robots/configs/gripper_combo_parameters.json"))
+	d := rimage.NewMultipleImageTestDebugger(t, "segmentation/gripper/color", "*.png", "segmentation/gripper/depth")
+	camera, err := transform.NewDepthColorIntrinsicsExtrinsicsFromJSONFile(gripperComboParamsPath)
 	test.That(t, err, test.ShouldBeNil)
 
 	err = d.Process(t, &gripperPlaneTestHelper{camera})
@@ -152,24 +160,26 @@ func (h *gripperPlaneTestHelper) Process(
 	t *testing.T,
 	pCtx *rimage.ProcessorContext,
 	fn string,
-	img image.Image,
+	img, img2 image.Image,
 	logger golog.Logger,
 ) error {
 	t.Helper()
 	var err error
-	ii := rimage.ConvertToImageWithDepth(img)
+	im := rimage.ConvertImage(img)
+	dm, err := rimage.ConvertImageToDepthMap(img2)
+	test.That(t, err, test.ShouldBeNil)
 	test.That(t, h.cameraParams, test.ShouldNotBeNil)
 
-	pCtx.GotDebugImage(ii.Depth.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth")
+	pCtx.GotDebugImage(dm.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth")
 
 	// Pre-process the depth map to smooth the noise out and fill holes
-	ii, err = rimage.PreprocessDepthMap(ii)
+	dm, err = rimage.PreprocessDepthMap(dm, im)
 	test.That(t, err, test.ShouldBeNil)
 
-	pCtx.GotDebugImage(ii.Depth.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth-filled")
+	pCtx.GotDebugImage(dm.ToPrettyPicture(0, rimage.MaxDepth), "gripper-depth-filled")
 
 	// Get the point cloud
-	cloud, err := h.cameraParams.ImageWithDepthToPointCloud(ii)
+	cloud, err := h.cameraParams.RGBDToPointCloud(im, dm)
 	test.That(t, err, test.ShouldBeNil)
 	pCtx.GotDebugPointCloud(cloud, "gripper-pointcloud")
 

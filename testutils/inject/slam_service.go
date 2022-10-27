@@ -12,26 +12,17 @@ import (
 // SLAMService represents a fake instance of a slam service.
 type SLAMService struct {
 	slam.Service
-	GetPositionFunc func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error)
-	GetMapFunc      func(ctx context.Context, name string, mimeType string, cp *referenceframe.PoseInFrame,
+	PositionFunc func(ctx context.Context, name string) (*referenceframe.PoseInFrame, error)
+	GetMapFunc   func(ctx context.Context, name, mimeType string, cp *referenceframe.PoseInFrame,
 		include bool) (string, image.Image, *vision.Object, error)
-	CloseFunc func() error
 }
 
-// Close calls the injected CloseFunc or the real version.
-func (slamSvc *SLAMService) Close() error {
-	if slamSvc.CloseFunc == nil {
-		return slamSvc.Service.Close()
+// Position calls the injected PositionFunc or the real version.
+func (slamSvc *SLAMService) Position(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
+	if slamSvc.PositionFunc == nil {
+		return slamSvc.Service.Position(ctx, name)
 	}
-	return slamSvc.CloseFunc()
-}
-
-// GetPosition calls the injected GetPositionFunc or the real version.
-func (slamSvc *SLAMService) GetPosition(ctx context.Context, name string) (*referenceframe.PoseInFrame, error) {
-	if slamSvc.GetPositionFunc == nil {
-		return slamSvc.Service.GetPosition(ctx, name)
-	}
-	return slamSvc.GetPositionFunc(ctx, name)
+	return slamSvc.PositionFunc(ctx, name)
 }
 
 // GetMap calls the injected GetMapFunc or the real version.

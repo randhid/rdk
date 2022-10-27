@@ -2,8 +2,8 @@ package referenceframe
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"math"
+	"os"
 
 	"github.com/golang/geo/r3"
 	"github.com/pkg/errors"
@@ -27,8 +27,8 @@ type ModelConfig struct {
 		Type   string             `json:"type"`
 		Parent string             `json:"parent"`
 		Axis   spatial.AxisConfig `json:"axis"`
-		Max    float64            `json:"max"`
-		Min    float64            `json:"min"`
+		Max    float64            `json:"max"` // in mm or degs
+		Min    float64            `json:"min"` // in mm or degs
 	} `json:"joints"`
 	DHParams []struct {
 		ID       string                 `json:"id"`
@@ -36,8 +36,8 @@ type ModelConfig struct {
 		A        float64                `json:"a"`
 		D        float64                `json:"d"`
 		Alpha    float64                `json:"alpha"`
-		Max      float64                `json:"max"`
-		Min      float64                `json:"min"`
+		Max      float64                `json:"max"` // in mm or degs
+		Min      float64                `json:"min"` // in mm or degs
 		Geometry spatial.GeometryConfig `json:"geometry"`
 	} `json:"dhParams"`
 	RawFrames []FrameMapConfig `json:"frames"`
@@ -46,14 +46,11 @@ type ModelConfig struct {
 // ParseConfig converts the ModelConfig struct into a full Model with the name modelName.
 func (config *ModelConfig) ParseConfig(modelName string) (Model, error) {
 	var err error
-	model := NewSimpleModel()
-
 	if modelName == "" {
-		model.ChangeName(config.Name)
-	} else {
-		model.ChangeName(modelName)
+		modelName = config.Name
 	}
 
+	model := NewSimpleModel(modelName)
 	transforms := map[string]Frame{}
 
 	// Make a map of parents for each element for post-process, to allow items to be processed out of order
@@ -120,13 +117,17 @@ func (config *ModelConfig) ParseConfig(modelName string) (Model, error) {
 
 			// Link part of DH param
 			linkID := dh.ID
-			linkQuat := spatial.NewPoseFromDH(dh.A, dh.D, dh.Alpha)
-
-			transforms[linkID], err = NewStaticFrame(linkID, linkQuat)
+			pose := spatial.NewPoseFromDH(dh.A, dh.D, dh.Alpha)
+			parentMap[linkID] = jointID
+			geometryCreator, err := dh.Geometry.ParseConfig()
+			if err == nil {
+				transforms[dh.ID], err = NewStaticFrameWithGeometry(dh.ID, pose, geometryCreator)
+			} else {
+				transforms[dh.ID], err = NewStaticFrame(dh.ID, pose)
+			}
 			if err != nil {
 				return nil, err
 			}
-			parentMap[linkID] = jointID
 		}
 
 	case "frames":
@@ -196,7 +197,7 @@ func (config *ModelConfig) ParseConfig(modelName string) (Model, error) {
 // ParseModelJSONFile will read a given file and then parse the contained JSON data.
 func ParseModelJSONFile(filename, modelName string) (Model, error) {
 	//nolint:gosec
-	jsonData, err := ioutil.ReadFile(filename)
+	jsonData, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read json file")
 	}

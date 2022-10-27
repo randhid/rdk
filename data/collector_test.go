@@ -4,18 +4,17 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/edaniels/golog"
 	"github.com/matttproud/golang_protobuf_extensions/pbutil"
-	"github.com/pkg/errors"
 	"go.uber.org/zap/zapcore"
-	v1 "go.viam.com/api/proto/viam/datasync/v1"
+	v1 "go.viam.com/api/app/datasync/v1"
 	"go.viam.com/test"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"go.viam.com/rdk/protoutils"
@@ -34,10 +33,10 @@ func (r *structReading) toProto() *structpb.Struct {
 }
 
 var (
-	dummyStructCapturer = CaptureFunc(func(ctx context.Context, _ map[string]string) (interface{}, error) {
+	dummyStructCapturer = CaptureFunc(func(ctx context.Context, _ map[string]*anypb.Any) (interface{}, error) {
 		return dummyStructReading, nil
 	})
-	dummyBinaryCapturer = CaptureFunc(func(ctx context.Context, _ map[string]string) (interface{}, error) {
+	dummyBinaryCapturer = CaptureFunc(func(ctx context.Context, _ map[string]*anypb.Any) (interface{}, error) {
 		return dummyBytesReading, nil
 	})
 	dummyStructReading      = structReading{}
@@ -45,6 +44,7 @@ var (
 	dummyBytesReading       = []byte("I sure am bytes")
 	queueSize               = 250
 	bufferSize              = 4096
+	fakeVal                 = &anypb.Any{}
 )
 
 func TestNewCollector(t *testing.T) {
@@ -55,7 +55,7 @@ func TestNewCollector(t *testing.T) {
 	test.That(t, err1, test.ShouldNotBeNil)
 
 	// If not missing parameters, should not return an error.
-	target1, _ := ioutil.TempFile("", "whatever")
+	target1, _ := os.CreateTemp("", "whatever")
 	c2, err2 := NewCollector(nil, CollectorParams{
 		ComponentName: "name",
 		Logger:        golog.NewTestLogger(t),
@@ -89,7 +89,7 @@ func TestSuccessfulWrite(t *testing.T) {
 			params: CollectorParams{
 				ComponentName: "testComponent",
 				Interval:      tickerInterval,
-				MethodParams:  map[string]string{"name": "test"},
+				MethodParams:  map[string]*anypb.Any{"name": fakeVal},
 				QueueSize:     queueSize,
 				BufferSize:    bufferSize,
 				Logger:        l,
@@ -103,7 +103,7 @@ func TestSuccessfulWrite(t *testing.T) {
 			params: CollectorParams{
 				ComponentName: "testComponent",
 				Interval:      sleepInterval,
-				MethodParams:  map[string]string{"name": "test"},
+				MethodParams:  map[string]*anypb.Any{"name": fakeVal},
 				QueueSize:     queueSize,
 				BufferSize:    bufferSize,
 				Logger:        l,
@@ -117,7 +117,7 @@ func TestSuccessfulWrite(t *testing.T) {
 			params: CollectorParams{
 				ComponentName: "testComponent",
 				Interval:      tickerInterval,
-				MethodParams:  map[string]string{"name": "test"},
+				MethodParams:  map[string]*anypb.Any{"name": fakeVal},
 				QueueSize:     queueSize,
 				BufferSize:    bufferSize,
 				Logger:        l,
@@ -131,7 +131,7 @@ func TestSuccessfulWrite(t *testing.T) {
 			params: CollectorParams{
 				ComponentName: "testComponent",
 				Interval:      sleepInterval,
-				MethodParams:  map[string]string{"name": "test"},
+				MethodParams:  map[string]*anypb.Any{"name": fakeVal},
 				QueueSize:     queueSize,
 				BufferSize:    bufferSize,
 				Logger:        l,
@@ -142,10 +142,10 @@ func TestSuccessfulWrite(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		target, _ := ioutil.TempFile("", "whatever")
+		target, _ := os.CreateTemp("", "whatever")
 		tc.params.Target = target
 		c, _ := NewCollector(tc.capturer, tc.params)
-		go c.Collect()
+		c.Collect()
 
 		// Verify that it writes to the file at all.
 		time.Sleep(tc.wait)
@@ -166,19 +166,19 @@ func TestSuccessfulWrite(t *testing.T) {
 func TestClose(t *testing.T) {
 	// Set up a collector.
 	l := golog.NewTestLogger(t)
-	target1, _ := ioutil.TempFile("", "whatever")
+	target1, _ := os.CreateTemp("", "whatever")
 	defer os.Remove(target1.Name())
 	params := CollectorParams{
 		ComponentName: "testComponent",
 		Interval:      time.Millisecond * 15,
-		MethodParams:  map[string]string{"name": "test"},
+		MethodParams:  map[string]*anypb.Any{"name": fakeVal},
 		Target:        target1,
 		QueueSize:     queueSize,
 		BufferSize:    bufferSize,
 		Logger:        l,
 	}
 	c, _ := NewCollector(dummyStructCapturer, params)
-	go c.Collect()
+	c.Collect()
 	time.Sleep(time.Millisecond * 25)
 
 	// Close and measure fileSize.
@@ -192,22 +192,22 @@ func TestClose(t *testing.T) {
 
 func TestSetTarget(t *testing.T) {
 	l := golog.NewTestLogger(t)
-	target1, _ := ioutil.TempFile("", "whatever1")
-	target2, _ := ioutil.TempFile("", "whatever2")
+	target1, _ := os.CreateTemp("", "whatever1")
+	target2, _ := os.CreateTemp("", "whatever2")
 	defer os.Remove(target1.Name())
 	defer os.Remove(target2.Name())
 
 	params := CollectorParams{
 		ComponentName: "testComponent",
 		Interval:      time.Millisecond * 15,
-		MethodParams:  map[string]string{"name": "test"},
+		MethodParams:  map[string]*anypb.Any{"name": fakeVal},
 		Target:        target1,
 		QueueSize:     queueSize,
 		BufferSize:    bufferSize,
 		Logger:        l,
 	}
 	c, _ := NewCollector(dummyStructCapturer, params)
-	go c.Collect()
+	c.Collect()
 	time.Sleep(time.Millisecond * 30)
 
 	// Change target, verify that target1 was written to.
@@ -222,70 +222,27 @@ func TestSetTarget(t *testing.T) {
 	test.That(t, getFileSize(target2), test.ShouldBeGreaterThan, 0)
 }
 
-// Verifies that Collect does not error if it receives a single error when calling capture, and that those errors are
-// logged.
-func TestSwallowsErrors(t *testing.T) {
-	logger, logs := golog.NewObservedTestLogger(t)
-	target1, _ := ioutil.TempFile("", "whatever")
-	defer os.Remove(target1.Name())
-
-	errorCapturer := CaptureFunc(func(ctx context.Context, _ map[string]string) (interface{}, error) {
-		return nil, errors.New("error")
-	})
-	params := CollectorParams{
-		ComponentName: "testComponent",
-		Interval:      time.Millisecond * 10,
-		MethodParams:  map[string]string{"name": "test"},
-		Target:        target1,
-		QueueSize:     queueSize,
-		BufferSize:    bufferSize,
-		Logger:        logger,
-	}
-	c, _ := NewCollector(errorCapturer, params)
-	errorChannel := make(chan error)
-	defer close(errorChannel)
-	go func() {
-		err := c.Collect()
-		if err != nil {
-			errorChannel <- err
-		}
-	}()
-	time.Sleep(30 * time.Millisecond)
-	c.Close()
-
-	// Sleep for a short period to avoid race condition when accessing the logs below (since the collector might still
-	// write an error log for a few instructions after .Close() is called, and this test is reading from the logger).
-	time.Sleep(10 * time.Millisecond)
-
-	// Verify that no errors were passed into errorChannel, and that errors were logged.
-	select {
-	case err := <-errorChannel:
-		logger.Fatalf("Collector.Collect propogated error: %s", err)
-	default:
-		test.That(t, logs.FilterLevelExact(zapcore.ErrorLevel).Len(), test.ShouldBeGreaterThan, 0)
-	}
-}
-
 // TestCtxCancelledLoggedAsDebug verifies that context cancelled errors are logged as debug level instead of as errors.
 func TestCtxCancelledLoggedAsDebug(t *testing.T) {
 	logger, logs := golog.NewObservedTestLogger(t)
-	target1, _ := ioutil.TempFile("", "whatever")
+	target1, _ := os.CreateTemp("", "whatever")
 	defer os.Remove(target1.Name())
-	errorCapturer := CaptureFunc(func(ctx context.Context, _ map[string]string) (interface{}, error) {
+	errorCapturer := CaptureFunc(func(ctx context.Context, _ map[string]*anypb.Any) (interface{}, error) {
 		return nil, fmt.Errorf("arbitrary wrapping message: %w", context.Canceled)
 	})
+
 	params := CollectorParams{
 		ComponentName: "testComponent",
 		Interval:      time.Millisecond * 10,
-		MethodParams:  map[string]string{"name": "test"},
+		MethodParams:  map[string]*anypb.Any{"name": fakeVal},
 		Target:        target1,
 		QueueSize:     queueSize,
 		BufferSize:    bufferSize,
 		Logger:        logger,
 	}
 	c, _ := NewCollector(errorCapturer, params)
-	go c.Collect()
-	time.Sleep(30 * time.Millisecond)
+	c.Collect()
+	time.Sleep(25 * time.Millisecond)
 	c.Close()
 
 	// Sleep for a short period to avoid race condition when accessing the logs below (since the collector might still

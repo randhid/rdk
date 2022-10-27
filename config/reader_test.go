@@ -2,10 +2,12 @@ package config
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/edaniels/golog"
+	"github.com/google/uuid"
 	"go.viam.com/test"
 )
 
@@ -33,16 +35,16 @@ func TestStoreToCache(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 
 	// read config from cloud, confirm consistency
-	cloudCfg, _, err := readFromCloud(ctx, cfg, true, true, logger)
+	cloudCfg, err := readFromCloud(ctx, cfg, nil, true, true, logger)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, cloudCfg, test.ShouldResemble, cfg)
 
 	// Modify our config
-	newRemote := Remote{Name: "test", Address: "foo", Prefix: true}
+	newRemote := Remote{Name: "test", Address: "foo"}
 	cfg.Remotes = append(cfg.Remotes, newRemote)
 
 	// read config from cloud again, confirm that the cached config differs from cfg
-	cloudCfg2, _, err := readFromCloud(ctx, cfg, true, true, logger)
+	cloudCfg2, err := readFromCloud(ctx, cfg, nil, true, true, logger)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, cloudCfg2, test.ShouldNotResemble, cfg)
 
@@ -51,7 +53,55 @@ func TestStoreToCache(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 
 	// read updated cloud config, confirm that it now matches our updated cfg
-	cloudCfg3, _, err := readFromCloud(ctx, cfg, true, true, logger)
+	cloudCfg3, err := readFromCloud(ctx, cfg, nil, true, true, logger)
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, cloudCfg3, test.ShouldResemble, cfg)
+}
+
+func TestCacheInvalidation(t *testing.T) {
+	id := uuid.New().String()
+	// store invalid config in cache
+	cachePath := getCloudCacheFilePath(id)
+	err := os.WriteFile(cachePath, []byte("invalid-json"), 0o750)
+	test.That(t, err, test.ShouldBeNil)
+
+	// read from cache, should return parse error and remove file
+	_, err = readFromCache(id)
+	test.That(t, err.Error(), test.ShouldContainSubstring, "cannot parse the cached config as json")
+
+	// read from cache again and file should not exist
+	_, err = readFromCache(id)
+	test.That(t, os.IsNotExist(err), test.ShouldBeTrue)
+}
+
+func TestShouldCheckForCert(t *testing.T) {
+	cloud1 := Cloud{
+		ManagedBy:        "acme",
+		SignalingAddress: "abc",
+		ID:               "forCachingTest",
+		Secret:           "ghi",
+		FQDN:             "fqdn",
+		LocalFQDN:        "localFqdn",
+		TLSCertificate:   "cert",
+		TLSPrivateKey:    "key",
+	}
+	cloud2 := cloud1
+	test.That(t, shouldCheckForCert(&cloud1, &cloud2), test.ShouldBeFalse)
+
+	cloud2.TLSCertificate = "abc"
+	test.That(t, shouldCheckForCert(&cloud1, &cloud2), test.ShouldBeFalse)
+
+	cloud2 = cloud1
+	cloud2.LocationSecret = "something else"
+	test.That(t, shouldCheckForCert(&cloud1, &cloud2), test.ShouldBeTrue)
+}
+
+func TestProcessConfig(t *testing.T) {
+	unprocessedConfig := Config{
+		ConfigFilePath: "path",
+	}
+
+	cfg, err := processConfig(&unprocessedConfig, true)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, *cfg, test.ShouldResemble, unprocessedConfig)
 }

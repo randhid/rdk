@@ -5,17 +5,23 @@ import (
 	"context"
 
 	"github.com/edaniels/golog"
+	commonpb "go.viam.com/api/common/v1"
 	"go.viam.com/utils/pexec"
 
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/discovery"
 	"go.viam.com/rdk/operation"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	framesystemparts "go.viam.com/rdk/robot/framesystem/parts"
 	weboptions "go.viam.com/rdk/robot/web/options"
+	"go.viam.com/rdk/utils"
 )
+
+// NewUnimplementedLocalInterfaceError is used when there is a failed interface check.
+func NewUnimplementedLocalInterfaceError(actual interface{}) error {
+	return utils.NewUnimplementedInterfaceError((LocalRobot)(nil), actual)
+}
 
 // A Robot encompasses all functionality of some robot comprised
 // of parts, local and remote.
@@ -58,11 +64,14 @@ type Robot interface {
 		additionalTransforms []*commonpb.Transform,
 	) (*referenceframe.PoseInFrame, error)
 
-	// GetStatus takes a list of resource names and returns their corresponding statuses. If no names are passed in, return all statuses.
-	GetStatus(ctx context.Context, resourceNames []resource.Name) ([]Status, error)
+	// Status takes a list of resource names and returns their corresponding statuses. If no names are passed in, return all statuses.
+	Status(ctx context.Context, resourceNames []resource.Name) ([]Status, error)
 
 	// Close attempts to cleanly close down all constituent parts of the robot.
 	Close(ctx context.Context) error
+
+	// StopAll cancels all current and outstanding operations for the robot and stops all actuators and movement
+	StopAll(ctx context.Context, extra map[resource.Name]map[string]interface{}) error
 }
 
 // A Refresher can refresh the contents of a robot.
@@ -81,7 +90,7 @@ type LocalRobot interface {
 
 	// Reconfigure instructs the robot to safely reconfigure itself based
 	// on the given new config.
-	Reconfigure(ctx context.Context, newConfig *config.Config) error
+	Reconfigure(ctx context.Context, newConfig *config.Config)
 
 	// StartWeb starts the web server, will return an error if server is already up.
 	StartWeb(ctx context.Context, o weboptions.Options) error
@@ -128,7 +137,7 @@ func NamesBySubtype(r Robot, subtype resource.Subtype) []string {
 	names := []string{}
 	for _, n := range r.ResourceNames() {
 		if n.Subtype == subtype {
-			names = append(names, n.Name)
+			names = append(names, n.ShortName())
 		}
 	}
 	return names

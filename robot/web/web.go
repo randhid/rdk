@@ -11,41 +11,42 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Masterminds/sprig"
+	"github.com/NYTimes/gziphandler"
 	"github.com/edaniels/golog"
 	"github.com/edaniels/gostream"
-	"github.com/edaniels/gostream/codec/x264"
 	streampb "github.com/edaniels/gostream/proto/stream/v1"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/pkg/errors"
 	"go.opencensus.io/trace"
+	pb "go.viam.com/api/robot/v1"
 	"go.viam.com/utils"
-	"go.viam.com/utils/perf"
 	echopb "go.viam.com/utils/proto/rpc/examples/echo/v1"
 	"go.viam.com/utils/rpc"
 	echoserver "go.viam.com/utils/rpc/examples/echo/server"
 	"goji.io"
 	"goji.io/pat"
-	"golang.org/x/net/http2/h2c"
 	googlegrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"go.viam.com/rdk/component/camera"
-	"go.viam.com/rdk/component/generic"
+	"go.viam.com/rdk/components/audioinput"
+	"go.viam.com/rdk/components/camera"
+	"go.viam.com/rdk/components/generic"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/grpc"
-	grpcserver "go.viam.com/rdk/grpc/server"
-	pb "go.viam.com/rdk/proto/api/robot/v1"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
+	grpcserver "go.viam.com/rdk/robot/server"
 	weboptions "go.viam.com/rdk/robot/web/options"
+	webstream "go.viam.com/rdk/robot/web/stream"
 	"go.viam.com/rdk/subtype"
 	rutils "go.viam.com/rdk/utils"
 	"go.viam.com/rdk/web"
@@ -105,6 +106,7 @@ func (app *robotWebApp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	type Temp struct {
 		External                   bool
 		WebRTCEnabled              bool
+		Env                        string
 		WebRTCHost                 string
 		WebRTCSignalingAddress     string
 		WebRTCAdditionalICEServers []map[string]interface{}
@@ -116,6 +118,12 @@ func (app *robotWebApp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := r.ParseForm(); err != nil {
 		app.logger.Debugw("failed to parse form", "error", err)
+	}
+
+	if os.Getenv("ENV") == "development" {
+		temp.Env = "development"
+	} else {
+		temp.Env = "production"
 	}
 
 	if app.options.WebRTC && r.Form.Get("grpc") != "true" {
@@ -140,10 +148,10 @@ func (app *robotWebApp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// allSourcesToDisplay returns every possible image source that could be viewed from
+// allVideoSourcesToDisplay returns every possible video source that could be viewed from
 // the robot.
-func allSourcesToDisplay(theRobot robot.Robot) map[string]gostream.ImageSource {
-	sources := make(map[string]gostream.ImageSource)
+func allVideoSourcesToDisplay(theRobot robot.Robot) map[string]gostream.VideoSource {
+	sources := make(map[string]gostream.VideoSource)
 
 	for _, name := range camera.NamesFromRobot(theRobot) {
 		cam, err := camera.FromRobot(theRobot, name)
@@ -157,7 +165,22 @@ func allSourcesToDisplay(theRobot robot.Robot) map[string]gostream.ImageSource {
 	return sources
 }
 
-var defaultStreamConfig = x264.DefaultStreamConfig
+// allAudioSourcesToDisplay returns every possible audio source that could be listened to from
+// the robot.
+func allAudioSourcesToDisplay(theRobot robot.Robot) map[string]gostream.AudioSource {
+	sources := make(map[string]gostream.AudioSource)
+
+	for _, name := range audioinput.NamesFromRobot(theRobot) {
+		input, err := audioinput.FromRobot(theRobot, name)
+		if err != nil {
+			continue
+		}
+
+		sources[name] = input
+	}
+
+	return sources
+}
 
 // A Service controls the web server for a robot.
 type Service interface {
@@ -177,13 +200,18 @@ type StreamServer struct {
 }
 
 // New returns a new web service for the given robot.
-func New(ctx context.Context, r robot.Robot, logger golog.Logger) Service {
+func New(ctx context.Context, r robot.Robot, logger golog.Logger, opts ...Option) Service {
+	var wOpts options
+	for _, opt := range opts {
+		opt.apply(&wOpts)
+	}
 	webSvc := &webService{
 		r:            r,
 		logger:       logger,
 		rpcServer:    nil,
 		streamServer: nil,
 		services:     make(map[resource.Subtype]subtype.Service),
+		opts:         wOpts,
 	}
 	return webSvc
 }
@@ -194,6 +222,7 @@ type webService struct {
 	rpcServer    rpc.Server
 	streamServer *StreamServer
 	services     map[resource.Subtype]subtype.Service
+	opts         options
 
 	logger                  golog.Logger
 	cancelFunc              func()
@@ -210,7 +239,12 @@ func (svc *webService) Start(ctx context.Context, o weboptions.Options) error {
 	cancelCtx, cancelFunc := context.WithCancel(ctx)
 	svc.cancelFunc = cancelFunc
 
-	return svc.runWeb(cancelCtx, o)
+	if err := svc.runWeb(cancelCtx, o); err != nil {
+		cancelFunc()
+		svc.cancelFunc = nil
+		return err
+	}
+	return nil
 }
 
 // RunWeb starts the web server on the robot with web options and blocks until we cancel the context.
@@ -308,11 +342,18 @@ func (svc *webService) addNewStreams(ctx context.Context) error {
 		svc.logger.Warn("attempting to add stream before stream server is initialized. skipping this operation...")
 		return nil
 	}
-	sources := allSourcesToDisplay(svc.r)
+	videoSources := allVideoSourcesToDisplay(svc.r)
+	audioSources := allAudioSourcesToDisplay(svc.r)
+	if svc.opts.streamConfig == nil {
+		if len(videoSources) != 0 || len(audioSources) != 0 {
+			svc.logger.Debug("not starting streams due to no stream config being set")
+		}
+		return nil
+	}
 
-	for name, source := range sources {
+	newStream := func(name string) (gostream.Stream, bool, error) {
 		// Configure new stream
-		config := defaultStreamConfig
+		config := *svc.opts.streamConfig
 		config.Name = name
 		stream, err := svc.streamServer.Server.NewStream(config)
 
@@ -320,39 +361,85 @@ func (svc *webService) addNewStreams(ctx context.Context) error {
 		var registeredError *gostream.StreamAlreadyRegisteredError
 		if errors.As(err, &registeredError) {
 			svc.logger.Warn(registeredError.Error())
-			continue
+			return nil, true, nil
 		} else if err != nil {
-			return err
+			return nil, false, err
 		}
 
 		if !svc.streamServer.HasStreams {
 			svc.streamServer.HasStreams = true
 		}
+		return stream, false, nil
+	}
 
-		// Stream
-		svc.startStream(ctx, source, stream)
+	for name, source := range videoSources {
+		stream, alreadyRegistered, err := newStream(name)
+		if err != nil {
+			return err
+		} else if alreadyRegistered {
+			continue
+		}
+
+		svc.startImageStream(ctx, source, stream)
+	}
+
+	for name, source := range audioSources {
+		stream, alreadyRegistered, err := newStream(name)
+		if err != nil {
+			return err
+		} else if alreadyRegistered {
+			continue
+		}
+
+		svc.startAudioStream(ctx, source, stream)
 	}
 
 	return nil
 }
 
 func (svc *webService) makeStreamServer(ctx context.Context) (*StreamServer, error) {
-	sources := allSourcesToDisplay(svc.r)
+	videoSources := allVideoSourcesToDisplay(svc.r)
+	audioSources := allAudioSourcesToDisplay(svc.r)
 	var streams []gostream.Stream
+	var streamTypes []bool
 
-	if len(sources) == 0 {
+	if svc.opts.streamConfig == nil || (len(videoSources) == 0 && len(audioSources) == 0) {
+		if len(videoSources) != 0 || len(audioSources) != 0 {
+			svc.logger.Debug("not starting streams due to no stream config being set")
+		}
 		noopServer, err := gostream.NewStreamServer(streams...)
 		return &StreamServer{noopServer, false}, err
 	}
 
-	for name := range sources {
-		config := defaultStreamConfig
+	addStream := func(streams []gostream.Stream, name string, isVideo bool) ([]gostream.Stream, error) {
+		config := *svc.opts.streamConfig
 		config.Name = name
+		if isVideo {
+			config.AudioEncoderFactory = nil
+		} else {
+			config.VideoEncoderFactory = nil
+		}
 		stream, err := gostream.NewStream(config)
+		if err != nil {
+			return streams, err
+		}
+		return append(streams, stream), nil
+	}
+	for name := range videoSources {
+		var err error
+		streams, err = addStream(streams, name, true)
 		if err != nil {
 			return nil, err
 		}
-		streams = append(streams, stream)
+		streamTypes = append(streamTypes, true)
+	}
+	for name := range audioSources {
+		var err error
+		streams, err = addStream(streams, name, false)
+		if err != nil {
+			return nil, err
+		}
+		streamTypes = append(streamTypes, false)
 	}
 
 	streamServer, err := gostream.NewStreamServer(streams...)
@@ -360,22 +447,45 @@ func (svc *webService) makeStreamServer(ctx context.Context) (*StreamServer, err
 		return nil, err
 	}
 
-	for _, stream := range streams {
-		svc.startStream(ctx, sources[stream.Name()], stream)
+	for idx, stream := range streams {
+		if streamTypes[idx] {
+			svc.startImageStream(ctx, videoSources[stream.Name()], stream)
+		} else {
+			svc.startAudioStream(ctx, audioSources[stream.Name()], stream)
+		}
 	}
 
 	return &StreamServer{streamServer, true}, nil
 }
 
-func (svc *webService) startStream(ctx context.Context, source gostream.ImageSource, stream gostream.Stream) {
+func (svc *webService) startStream(streamFunc func(opts *webstream.BackoffTuningOptions) error) {
 	waitCh := make(chan struct{})
 	svc.activeBackgroundWorkers.Add(1)
 	utils.PanicCapturingGo(func() {
 		defer svc.activeBackgroundWorkers.Done()
 		close(waitCh)
-		gostream.StreamSource(ctx, source, stream)
+		opts := &webstream.BackoffTuningOptions{
+			BaseSleep: 50 * time.Microsecond,
+			MaxSleep:  2 * time.Second,
+			Cooldown:  5 * time.Second,
+		}
+		if err := streamFunc(opts); err != nil {
+			svc.logger.Errorw("error streaming", "error", err)
+		}
 	})
 	<-waitCh
+}
+
+func (svc *webService) startImageStream(ctx context.Context, source gostream.VideoSource, stream gostream.Stream) {
+	svc.startStream(func(opts *webstream.BackoffTuningOptions) error {
+		return webstream.StreamVideoSource(ctx, source, stream, opts)
+	})
+}
+
+func (svc *webService) startAudioStream(ctx context.Context, source gostream.AudioSource, stream gostream.Stream) {
+	svc.startStream(func(opts *webstream.BackoffTuningOptions) error {
+		return webstream.StreamAudioSource(ctx, source, stream, opts)
+	})
 }
 
 type ssStreamContextWrapper struct {
@@ -405,7 +515,7 @@ func (svc *webService) installWeb(mux *goji.Mux, theRobot robot.Robot, options w
 		staticDir = http.FS(embedFS)
 	}
 
-	mux.Handle(pat.Get("/static/*"), http.StripPrefix("/static", http.FileServer(staticDir)))
+	mux.Handle(pat.Get("/static/*"), gziphandler.GzipHandler(http.StripPrefix("/static", http.FileServer(staticDir))))
 	mux.Handle(pat.New("/"), app)
 
 	return nil
@@ -414,9 +524,16 @@ func (svc *webService) installWeb(mux *goji.Mux, theRobot robot.Robot, options w
 // runWeb takes the given robot and options and runs the web server. This function will
 // block until the context is done.
 func (svc *webService) runWeb(ctx context.Context, options weboptions.Options) (err error) {
-	listener, err := net.Listen("tcp", options.Network.BindAddress)
-	if err != nil {
-		return err
+	if options.Network.BindAddress != "" && options.Network.Listener != nil {
+		return errors.New("may only set one of network bind address or listener")
+	}
+	listener := options.Network.Listener
+
+	if listener == nil {
+		listener, err = net.Listen("tcp", options.Network.BindAddress)
+		if err != nil {
+			return err
+		}
 	}
 
 	listenerTCPAddr, ok := listener.Addr().(*net.TCPAddr)
@@ -579,12 +696,11 @@ func (svc *webService) initRPCOptions(listenerTCPAddr *net.TCPAddr, options webo
 			ExternalSignalingHosts:    hosts.External,
 			InternalSignalingHosts:    hosts.Internal,
 			Config:                    &grpc.DefaultWebRTCConfiguration,
+			OnPeerAdded:               options.WebRTCOnPeerAdded,
+			OnPeerRemoved:             options.WebRTCOnPeerRemoved,
 		}),
 	}
 	if options.Debug {
-		trace.RegisterExporter(perf.NewNiceLoggingSpanExporter())
-		trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()})
-
 		rpcOpts = append(rpcOpts,
 			rpc.WithDebug(),
 			rpc.WithUnaryServerInterceptor(func(
@@ -689,13 +805,17 @@ func (svc *webService) initAuthHandlers(listenerTCPAddr *net.TCPAddr, options we
 		for _, handler := range options.Auth.Handlers {
 			switch handler.Type {
 			case rpc.CredentialsTypeAPIKey:
-				apiKey := handler.Config.String("key")
-				if apiKey == "" {
-					return nil, errors.Errorf("%q handler requires non-empty API key", handler.Type)
+				apiKeys := handler.Config.StringSlice("keys")
+				if len(apiKeys) == 0 {
+					apiKey := handler.Config.String("key")
+					if apiKey == "" {
+						return nil, errors.Errorf("%q handler requires non-empty API key or keys", handler.Type)
+					}
+					apiKeys = []string{apiKey}
 				}
 				rpcOpts = append(rpcOpts, rpc.WithAuthHandler(
 					handler.Type,
-					rpc.MakeSimpleAuthHandler(authEntities, apiKey),
+					rpc.MakeSimpleMultiAuthHandler(authEntities, apiKeys),
 				))
 			case rutils.CredentialsTypeRobotLocationSecret:
 				secret := handler.Config.String("secret")
@@ -765,24 +885,15 @@ func (svc *webService) initHTTPServer(listenerTCPAddr *net.TCPAddr, options webo
 		return nil, err
 	}
 
-	httpServer := &http.Server{
-		ReadTimeout:    10 * time.Second,
+	httpServer, err := utils.NewPossiblySecureHTTPServer(mux, utils.HTTPServerOptions{
+		Secure:         options.Secure,
 		MaxHeaderBytes: rpc.MaxMessageSize,
-		TLSConfig:      options.Network.TLSConfig.Clone(),
+		Addr:           listenerTCPAddr.String(),
+	})
+	if err != nil {
+		return httpServer, err
 	}
-	httpServer.Addr = listenerTCPAddr.String()
-	httpServer.Handler = mux
-
-	if !options.Secure {
-		http2Server, err := utils.NewHTTP2Server()
-		if err != nil {
-			return nil, err
-		}
-		httpServer.RegisterOnShutdown(func() {
-			utils.UncheckedErrorFunc(http2Server.Close)
-		})
-		httpServer.Handler = h2c.NewHandler(httpServer.Handler, http2Server.HTTP2)
-	}
+	httpServer.TLSConfig = options.Network.TLSConfig.Clone()
 
 	return httpServer, nil
 }
@@ -871,11 +982,15 @@ func (svc *webService) foreignServiceHandler(srv interface{}, stream googlegrpc.
 		return fmt.Errorf("unable to route foreign message due to invalid name field %v", name)
 	}
 
-	fqName := resource.Name{foundType.Subtype, name}
+	fqName := resource.NameFromSubtype(foundType.Subtype, name)
 
 	resource, err := svc.r.ResourceByName(fqName)
 	if err != nil {
 		return err
+	}
+
+	if fqName.ContainsRemoteNames() {
+		firstMsg.SetFieldByName("name", fqName.PopRemote().ShortName())
 	}
 
 	foreignRes, ok := resource.(*grpc.ForeignResource)
@@ -918,7 +1033,10 @@ func (svc *webService) foreignServiceHandler(srv interface{}, stream googlegrpc.
 					cancel()
 					break
 				}
-
+				// remove a remote from the name if needed
+				if fqName.ContainsRemoteNames() {
+					msg.SetFieldByName("name", fqName.PopRemote().ShortName())
+				}
 				err = bidiStream.SendMsg(msg)
 			}
 
@@ -960,9 +1078,12 @@ func (svc *webService) foreignServiceHandler(srv interface{}, stream googlegrpc.
 				if errors.Is(err, io.EOF) {
 					break
 				}
+
 				return err
 			}
-
+			if fqName.ContainsRemoteNames() {
+				msg.SetFieldByName("name", fqName.PopRemote().ShortName())
+			}
 			if err := clientStream.SendMsg(msg); err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -970,7 +1091,6 @@ func (svc *webService) foreignServiceHandler(srv interface{}, stream googlegrpc.
 				return err
 			}
 		}
-
 		resp, err := clientStream.CloseAndReceive()
 		if err != nil {
 			return err

@@ -8,20 +8,18 @@ import (
 
 	"github.com/edaniels/golog"
 	"github.com/golang/geo/r3"
+	commonpb "go.viam.com/api/common/v1"
 	"go.viam.com/test"
 
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	frame "go.viam.com/rdk/referenceframe"
 	spatial "go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/utils"
 )
 
-var logger = golog.NewDevelopmentLogger("armplay")
-
 func TestIKTolerances(t *testing.T) {
 	logger := golog.NewTestLogger(t)
 
-	m, err := frame.ParseModelJSONFile(utils.ResolveFile("component/arm/varm/v1.json"), "")
+	m, err := frame.ParseModelJSONFile(utils.ResolveFile("motionplan/testjson/varm.json"), "")
 	test.That(t, err, test.ShouldBeNil)
 	mp, err := NewCBiRRTMotionPlanner(m, nCPU, logger)
 	test.That(t, err, test.ShouldBeNil)
@@ -35,7 +33,7 @@ func TestIKTolerances(t *testing.T) {
 		OY: -3.3,
 		OZ: -1.11,
 	}
-	opt := NewDefaultPlannerOptions()
+	opt := NewBasicPlannerOptions()
 	_, err = mp.Plan(context.Background(), pos, frame.FloatsToInputs([]float64{0, 0}), opt)
 	test.That(t, err, test.ShouldNotBeNil)
 
@@ -50,10 +48,12 @@ func TestConstraintPath(t *testing.T) {
 	homePos := frame.FloatsToInputs([]float64{0, 0, 0, 0, 0, 0})
 	toPos := frame.FloatsToInputs([]float64{0, 0, 0, 0, 0, 1})
 
-	modelXarm, err := frame.ParseModelJSONFile(utils.ResolveFile("component/arm/xarm/xarm6_kinematics.json"), "")
+	modelXarm, err := frame.ParseModelJSONFile(utils.ResolveFile("components/arm/xarm/xarm6_kinematics.json"), "")
 
 	test.That(t, err, test.ShouldBeNil)
 	ci := &ConstraintInput{StartInput: homePos, EndInput: toPos, Frame: modelXarm}
+	err = resolveInputsToPositions(ci)
+	test.That(t, err, test.ShouldBeNil)
 
 	handler := &constraintHandler{}
 
@@ -63,7 +63,8 @@ func TestConstraintPath(t *testing.T) {
 	test.That(t, ok, test.ShouldBeTrue)
 
 	// Test interpolating
-	handler.AddConstraint("interp", NewInterpolatingConstraint(0.5))
+	constraint, _ := NewProportionalLinearInterpolatingConstraint(ci.StartPos, ci.EndPos, 0.01)
+	handler.AddConstraint("interp", constraint)
 	ok, failCI = handler.CheckConstraintPath(ci, 0.5)
 	test.That(t, failCI, test.ShouldBeNil)
 	test.That(t, ok, test.ShouldBeTrue)
@@ -72,12 +73,16 @@ func TestConstraintPath(t *testing.T) {
 
 	badInterpPos := frame.FloatsToInputs([]float64{6.2, 0, 0, 0, 0, 0})
 	ciBad := &ConstraintInput{StartInput: homePos, EndInput: badInterpPos, Frame: modelXarm}
+	err = resolveInputsToPositions(ciBad)
+	test.That(t, err, test.ShouldBeNil)
 	ok, failCI = handler.CheckConstraintPath(ciBad, 0.5)
-	test.That(t, failCI, test.ShouldBeNil)
+	test.That(t, failCI, test.ShouldNotBeNil) // With linear constraint, should be valid at the first step
 	test.That(t, ok, test.ShouldBeFalse)
 }
 
 func TestLineFollow(t *testing.T) {
+	logger := golog.NewDevelopmentLogger("armplay")
+
 	p1 := spatial.NewPoseFromProtobuf(&commonpb.Pose{
 		X:  440,
 		Y:  -447,
@@ -116,15 +121,14 @@ func TestLineFollow(t *testing.T) {
 		OY: -1,
 	})
 
-	validOV := &spatial.OrientationVector{OY: -1}
-	validFunc, gradFunc := NewLineConstraint(p1.Point(), p2.Point(), validOV, 0., 0.001)
+	validFunc, gradFunc := NewLineConstraint(p1.Point(), p2.Point(), 0.001)
 
 	pointGrad := gradFunc(query, query)
 	test.That(t, pointGrad, test.ShouldBeLessThan, 0.001*0.001)
 
 	fs := frame.NewEmptySimpleFrameSystem("test")
 
-	m, err := frame.ParseModelJSONFile(utils.ResolveFile("component/arm/xarm/xarm7_kinematics.json"), "")
+	m, err := frame.ParseModelJSONFile(utils.ResolveFile("components/arm/xarm/xarm7_kinematics.json"), "")
 	test.That(t, err, test.ShouldBeNil)
 
 	err = fs.AddFrame(m, fs.World())
@@ -141,20 +145,23 @@ func TestLineFollow(t *testing.T) {
 
 	sFrames, err := fss.TracebackFrame(solveFrame)
 	test.That(t, err, test.ShouldBeNil)
-	gFrames, err := fss.TracebackFrame(goalFrame)
-	test.That(t, err, test.ShouldBeNil)
-	frames := uniqInPlaceSlice(append(sFrames, gFrames...))
 
 	// Create a frame to solve for, and an IK solver with that frame.
-	sf := &solverFrame{solveFrame.Name() + "_" + goalFrame.Name(), fss, frames, solveFrame, goalFrame}
+	sf, err := newSolverFrame(
+		fss,
+		sFrames,
+		goalFrame.Name(),
+		frame.StartPositions(fss),
+	)
+	test.That(t, err, test.ShouldBeNil)
 
-	opt := NewDefaultPlannerOptions()
+	opt := NewBasicPlannerOptions()
 	opt.SetPathDist(gradFunc)
 	opt.AddConstraint("whiteboard", validFunc)
 	ok, lastGood := opt.CheckConstraintPath(
 		&ConstraintInput{
-			StartInput: frame.JointPosToInputs(mp1),
-			EndInput:   frame.JointPosToInputs(mp2),
+			StartInput: sf.InputFromProtobuf(mp1),
+			EndInput:   sf.InputFromProtobuf(mp2),
 			Frame:      sf,
 		},
 		1,
@@ -171,11 +178,12 @@ func TestLineFollow(t *testing.T) {
 }
 
 func TestCollisionConstraint(t *testing.T) {
+	zeroPos := frame.FloatsToInputs([]float64{0, 0, 0, 0, 0, 0})
 	cases := []struct {
 		input    []frame.Input
 		expected bool
 	}{
-		{frame.FloatsToInputs([]float64{0, 0, 0, 0, 0, 0}), true},
+		{zeroPos, true},
 		{frame.FloatsToInputs([]float64{math.Pi / 2, 0, 0, 0, 0, 0}), true},
 		{frame.FloatsToInputs([]float64{math.Pi, 0, 0, 0, 0, 0}), false},
 		{frame.FloatsToInputs([]float64{math.Pi / 2, 0, 0, 0, 2, 0}), false},
@@ -189,10 +197,10 @@ func TestCollisionConstraint(t *testing.T) {
 	obstacles["obstacle2"] = bc.NewGeometry(spatial.NewPoseFromPoint(r3.Vector{-130, 0, 300}))
 
 	// setup zero position as reference CollisionGraph and use it in handler
-	model, err := frame.ParseModelJSONFile(utils.ResolveFile("component/arm/xarm/xarm6_kinematics.json"), "")
+	model, err := frame.ParseModelJSONFile(utils.ResolveFile("components/arm/xarm/xarm6_kinematics.json"), "")
 	test.That(t, err, test.ShouldBeNil)
 	handler := &constraintHandler{}
-	handler.AddConstraint("collision", NewCollisionConstraint(model, obstacles, map[string]spatial.Geometry{}))
+	handler.AddConstraint("collision", NewCollisionConstraint(model, zeroPos, obstacles, map[string]spatial.Geometry{}))
 
 	// loop through cases and check constraint handler processes them correctly
 	for i, c := range cases {

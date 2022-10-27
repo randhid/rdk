@@ -14,8 +14,9 @@ import (
 	"github.com/matttproud/golang_protobuf_extensions/pbutil"
 	"github.com/pkg/errors"
 	"go.opencensus.io/trace"
-	v1 "go.viam.com/api/proto/viam/datasync/v1"
+	"go.viam.com/api/app/datasync/v1"
 	"go.viam.com/utils"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"go.viam.com/rdk/protoutils"
@@ -27,14 +28,14 @@ var sleepCaptureCutoff = 2 * time.Millisecond
 
 // Capturer provides a function for capturing a single protobuf reading from the underlying component.
 type Capturer interface {
-	Capture(ctx context.Context, params map[string]string) (interface{}, error)
+	Capture(ctx context.Context, params map[string]*anypb.Any) (interface{}, error)
 }
 
 // CaptureFunc allows the creation of simple Capturers with anonymous functions.
-type CaptureFunc func(ctx context.Context, params map[string]string) (interface{}, error)
+type CaptureFunc func(ctx context.Context, params map[string]*anypb.Any) (interface{}, error)
 
 // Capture allows any CaptureFunc to conform to the Capturer interface.
-func (cf CaptureFunc) Capture(ctx context.Context, params map[string]string) (interface{}, error) {
+func (cf CaptureFunc) Capture(ctx context.Context, params map[string]*anypb.Any) (interface{}, error) {
 	return cf(ctx, params)
 }
 
@@ -43,13 +44,13 @@ type Collector interface {
 	SetTarget(file *os.File)
 	GetTarget() *os.File
 	Close()
-	Collect() error
+	Collect()
 }
 
 type collector struct {
 	queue             chan *v1.SensorData
 	interval          time.Duration
-	params            map[string]string
+	params            map[string]*anypb.Any
 	lock              *sync.Mutex
 	logger            golog.Logger
 	target            *os.File
@@ -81,11 +82,10 @@ func (c *collector) GetTarget() *os.File {
 // Close closes the channels backing the Collector. It should always be called before disposing of a Collector to avoid
 // leaking goroutines. Close() can only be called once; attempting to Close an already closed Collector will panic.
 func (c *collector) Close() {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
 	c.cancel()
 	c.backgroundWorkers.Wait()
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	if err := c.writer.Flush(); err != nil {
 		c.logger.Errorw("failed to flush writer to disk", "error", err)
 	}
@@ -93,13 +93,22 @@ func (c *collector) Close() {
 
 // Collect starts the Collector, causing it to run c.capturer.Capture every c.interval, and write the results to
 // c.target.
-func (c *collector) Collect() error {
+func (c *collector) Collect() {
 	_, span := trace.StartSpan(c.cancelCtx, "data::collector::Collect")
 	defer span.End()
 
 	c.backgroundWorkers.Add(1)
-	utils.PanicCapturingGo(c.capture)
-	return c.write()
+	utils.PanicCapturingGo(func() {
+		defer c.backgroundWorkers.Done()
+		c.capture()
+	})
+	c.backgroundWorkers.Add(1)
+	utils.PanicCapturingGo(func() {
+		defer c.backgroundWorkers.Done()
+		if err := c.write(); err != nil {
+			c.logger.Errorw(fmt.Sprintf("failed to write to file %s", c.target.Name()), "error", err)
+		}
+	})
 }
 
 // Go's time.Ticker has inconsistent performance with durations of below 1ms [0], so we use a time.Sleep based approach
@@ -107,8 +116,6 @@ func (c *collector) Collect() error {
 // avoid wasting CPU on a thread that's idling for the vast majority of the time.
 // [0]: https://www.mail-archive.com/golang-nuts@googlegroups.com/msg46002.html
 func (c *collector) capture() {
-	defer c.backgroundWorkers.Done()
-
 	if c.interval < sleepCaptureCutoff {
 		c.sleepBasedCapture()
 	} else {
@@ -280,6 +287,6 @@ func InvalidInterfaceErr(typeName resource.SubtypeName) error {
 }
 
 // FailedToReadErr is the error describing when a Capturer was unable to get the reading of a method.
-func FailedToReadErr(component string, method string, err error) error {
+func FailedToReadErr(component, method string, err error) error {
 	return errors.Errorf("failed to get reading of method %s of component %s: %v", method, component, err)
 }

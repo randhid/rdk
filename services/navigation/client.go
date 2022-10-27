@@ -7,42 +7,33 @@ import (
 	geo "github.com/kellydunn/golang-geo"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	commonpb "go.viam.com/api/common/v1"
+	pb "go.viam.com/api/service/navigation/v1"
 	"go.viam.com/utils/rpc"
-
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
-	pb "go.viam.com/rdk/proto/api/service/navigation/v1"
 )
 
-// client is a client satisfies the frame_system.proto contract.
+// client implements NavigationServiceClient.
 type client struct {
+	name   string
 	conn   rpc.ClientConn
 	client pb.NavigationServiceClient
 	logger golog.Logger
 }
 
-// newSvcClientFromConn constructs a new serviceClient using the passed in connection.
-func newSvcClientFromConn(conn rpc.ClientConn, logger golog.Logger) *client {
+// NewClientFromConn constructs a new Client from connection passed in.
+func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Service {
 	grpcClient := pb.NewNavigationServiceClient(conn)
-	sc := &client{
+	c := &client{
+		name:   name,
 		conn:   conn,
 		client: grpcClient,
 		logger: logger,
 	}
-	return sc
+	return c
 }
 
-// Close cleanly closes the underlying connections.
-func (c *client) Close(ctx context.Context) error {
-	return nil
-}
-
-// NewClientFromConn constructs a new Client from connection passed in.
-func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Service {
-	return newSvcClientFromConn(conn, logger)
-}
-
-func (c *client) GetMode(ctx context.Context) (Mode, error) {
-	resp, err := c.client.GetMode(ctx, &pb.GetModeRequest{})
+func (c *client) Mode(ctx context.Context) (Mode, error) {
+	resp, err := c.client.GetMode(ctx, &pb.GetModeRequest{Name: c.name})
 	if err != nil {
 		return 0, err
 	}
@@ -69,15 +60,15 @@ func (c *client) SetMode(ctx context.Context, mode Mode) error {
 	default:
 		pbMode = pb.Mode_MODE_UNSPECIFIED
 	}
-	_, err := c.client.SetMode(ctx, &pb.SetModeRequest{Mode: pbMode})
+	_, err := c.client.SetMode(ctx, &pb.SetModeRequest{Name: c.name, Mode: pbMode})
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *client) GetLocation(ctx context.Context) (*geo.Point, error) {
-	resp, err := c.client.GetLocation(ctx, &pb.GetLocationRequest{})
+func (c *client) Location(ctx context.Context) (*geo.Point, error) {
+	resp, err := c.client.GetLocation(ctx, &pb.GetLocationRequest{Name: c.name})
 	if err != nil {
 		return nil, err
 	}
@@ -86,8 +77,8 @@ func (c *client) GetLocation(ctx context.Context) (*geo.Point, error) {
 	return result, nil
 }
 
-func (c *client) GetWaypoints(ctx context.Context) ([]Waypoint, error) {
-	resp, err := c.client.GetWaypoints(ctx, &pb.GetWaypointsRequest{})
+func (c *client) Waypoints(ctx context.Context) ([]Waypoint, error) {
+	resp, err := c.client.GetWaypoints(ctx, &pb.GetWaypointsRequest{Name: c.name})
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +105,7 @@ func (c *client) AddWaypoint(ctx context.Context, point *geo.Point) error {
 		Longitude: point.Lng(),
 	}
 	req := &pb.AddWaypointRequest{
+		Name:     c.name,
 		Location: loc,
 	}
 	_, err := c.client.AddWaypoint(ctx, req)
@@ -124,7 +116,7 @@ func (c *client) AddWaypoint(ctx context.Context, point *geo.Point) error {
 }
 
 func (c *client) RemoveWaypoint(ctx context.Context, id primitive.ObjectID) error {
-	req := &pb.RemoveWaypointRequest{Id: id.Hex()}
+	req := &pb.RemoveWaypointRequest{Name: c.name, Id: id.Hex()}
 	_, err := c.client.RemoveWaypoint(ctx, req)
 	if err != nil {
 		return err

@@ -6,13 +6,13 @@ import (
 	"sync"
 
 	"github.com/edaniels/golog"
+	commonpb "go.viam.com/api/common/v1"
 	"go.viam.com/utils"
 	"go.viam.com/utils/pexec"
 
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/discovery"
 	"go.viam.com/rdk/operation"
-	commonpb "go.viam.com/rdk/proto/api/common/v1"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
@@ -32,6 +32,7 @@ type Robot struct {
 	ConfigFunc              func(ctx context.Context) (*config.Config, error)
 	LoggerFunc              func() golog.Logger
 	CloseFunc               func(ctx context.Context) error
+	StopAllFunc             func(ctx context.Context, extra map[resource.Name]map[string]interface{}) error
 	RefreshFunc             func(ctx context.Context) error
 	FrameSystemConfigFunc   func(ctx context.Context, additionalTransforms []*commonpb.Transform) (framesystemparts.Parts, error)
 	TransformPoseFunc       func(
@@ -40,7 +41,7 @@ type Robot struct {
 		dst string,
 		additionalTransforms []*commonpb.Transform,
 	) (*referenceframe.PoseInFrame, error)
-	GetStatusFunc func(ctx context.Context, resourceNames []resource.Name) ([]robot.Status, error)
+	StatusFunc func(ctx context.Context, resourceNames []resource.Name) ([]robot.Status, error)
 
 	ops     *operation.Manager
 	opsLock sync.Mutex
@@ -147,6 +148,14 @@ func (r *Robot) Close(ctx context.Context) error {
 	return r.CloseFunc(ctx)
 }
 
+// StopAll calls the injected StopAll or the real version.
+func (r *Robot) StopAll(ctx context.Context, extra map[resource.Name]map[string]interface{}) error {
+	if r.StopAllFunc == nil {
+		return r.LocalRobot.StopAll(ctx, extra)
+	}
+	return r.StopAllFunc(ctx, extra)
+}
+
 // Refresh calls the injected Refresh or the real version.
 func (r *Robot) Refresh(ctx context.Context) error {
 	if r.RefreshFunc == nil {
@@ -164,27 +173,6 @@ func (r *Robot) DiscoverComponents(ctx context.Context, keys []discovery.Query) 
 		return r.LocalRobot.DiscoverComponents(ctx, keys)
 	}
 	return r.DiscoverComponentsFunc(ctx, keys)
-}
-
-// RemoteRobot is an injected remote robot.
-type RemoteRobot struct {
-	Robot
-
-	Disconnected bool
-	ChangeChan   chan bool
-}
-
-// Changed returns a channel that returns true when the remote has changed.
-func (r *RemoteRobot) Changed() <-chan bool {
-	if r.ChangeChan == nil {
-		r.ChangeChan = make(chan bool)
-	}
-	return r.ChangeChan
-}
-
-// Connected returns whether the injected robot is connected or not.
-func (r *RemoteRobot) Connected() bool {
-	return !r.Disconnected
 }
 
 // FrameSystemConfig calls the injected FrameSystemConfig or the real version.
@@ -209,10 +197,10 @@ func (r *Robot) TransformPose(
 	return r.TransformPoseFunc(ctx, pose, dst, additionalTransforms)
 }
 
-// GetStatus call the injected GetStatus or the real one.
-func (r *Robot) GetStatus(ctx context.Context, resourceNames []resource.Name) ([]robot.Status, error) {
-	if r.GetStatusFunc == nil {
-		return r.LocalRobot.GetStatus(ctx, resourceNames)
+// Status call the injected Status or the real one.
+func (r *Robot) Status(ctx context.Context, resourceNames []resource.Name) ([]robot.Status, error) {
+	if r.StatusFunc == nil {
+		return r.LocalRobot.Status(ctx, resourceNames)
 	}
-	return r.GetStatusFunc(ctx, resourceNames)
+	return r.StatusFunc(ctx, resourceNames)
 }
