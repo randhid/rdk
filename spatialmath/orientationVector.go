@@ -16,6 +16,13 @@ import (
 // 1 - abs(OZ) > OrientationVectorPoleRadius.
 const orientationVectorPoleRadius = 0.0001
 
+type PointingAxis int
+
+const (
+	ZAxis PointingAxis = iota
+	YAxis
+)
+
 // OrientationVector containing ox, oy, oz, theta represents an orientation vector
 // Structured similarly to an angle axis, an orientation vector works differently. Rather than representing an orientation
 // with an arbitrary axis and a rotation around it from an origin, an orientation vector represents orientation
@@ -26,19 +33,21 @@ const orientationVectorPoleRadius = 0.0001
 // point, and the plane defined by the origin, the rx,ry,rz point, and the new local Z axis. So if theta is kept at
 // zero as the north/south pole is circled, the Roll will correct itself to remain in-line.
 type OrientationVector struct {
-	Theta float64 `json:"th"`
-	OX    float64 `json:"x"`
-	OY    float64 `json:"y"`
-	OZ    float64 `json:"z"`
+	Theta float64      `json:"th"`
+	OX    float64      `json:"x"`
+	OY    float64      `json:"y"`
+	OZ    float64      `json:"z"`
+	Axis  PointingAxis `json:"pointing_axis,omitempty"`
 }
 
 // OrientationVectorDegrees is the orientation vector between two objects, but expressed in degrees rather than radians.
 // Because protobuf Pose is in degrees, this is necessary.
 type OrientationVectorDegrees struct {
-	Theta float64 `json:"th"`
-	OX    float64 `json:"x"`
-	OY    float64 `json:"y"`
-	OZ    float64 `json:"z"`
+	Theta float64      `json:"th"`
+	OX    float64      `json:"x"`
+	OY    float64      `json:"y"`
+	OZ    float64      `json:"z"`
+	Axis  PointingAxis `json:"pointing_axis,omitempty"`
 }
 
 // NewOrientationVector Creates a zero-initialized OrientationVector.
@@ -69,6 +78,19 @@ func (ov *OrientationVector) Degrees() *OrientationVectorDegrees {
 
 // ToQuat converts an orientation vector to a quaternion.
 func (ov *OrientationVector) ToQuat() quat.Number {
+	switch ov.Axis {
+	case YAxis:
+		return ov.toQuatPointingInYAxis()
+	default: // pointing in Z-Axis is the default
+		return ov.toQuatPointingInZAxis()
+	}
+}
+
+func (ov *OrientationVector) toQuatPointingInYAxis() quat.Number {
+	return quat.Number{}
+}
+
+func (ov *OrientationVector) toQuatPointingInZAxis() quat.Number {
 	// make sure OrientationVector is normalized first
 	ov.Normalize()
 
