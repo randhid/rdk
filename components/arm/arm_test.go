@@ -119,6 +119,7 @@ func TestCreateStatus(t *testing.T) {
 			&spatialmath.OrientationVectorDegrees{
 				endPosMap["theta"].(float64), endPosMap["o_x"].(float64),
 				endPosMap["o_y"].(float64), endPosMap["o_z"].(float64),
+				spatialmath.ZAxis,
 			},
 		)
 		test.That(t, spatialmath.PoseAlmostEqualEps(actualPose, expectedPose, 0.01), test.ShouldBeTrue)

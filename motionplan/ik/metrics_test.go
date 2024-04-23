@@ -35,7 +35,7 @@ func TestBasicMetric(t *testing.T) {
 }
 
 var (
-	ov     = &spatial.OrientationVector{math.Pi / 2, 0, 0, -1}
+	ov     = &spatial.OrientationVector{math.Pi / 2, 0, 0, -1, spatial.ZAxis}
 	p1b    = &State{Position: spatial.NewPose(r3.Vector{1, 2, 3}, ov)}
 	p2b    = spatial.NewPose(r3.Vector{2, 3, 4}, ov)
 	result float64

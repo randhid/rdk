@@ -16,10 +16,11 @@ import (
 // 1 - abs(OZ) > OrientationVectorPoleRadius.
 const orientationVectorPoleRadius = 0.0001
 
-type PointingAxis int
+type pointingAxis int
 
+// The axis that the orientation vector points in.
 const (
-	ZAxis PointingAxis = iota
+	ZAxis pointingAxis = iota
 	YAxis
 )
 
@@ -37,7 +38,7 @@ type OrientationVector struct {
 	OX    float64      `json:"x"`
 	OY    float64      `json:"y"`
 	OZ    float64      `json:"z"`
-	Axis  PointingAxis `json:"pointing_axis,omitempty"`
+	Axis  pointingAxis `json:"pointing_axis,omitempty"`
 }
 
 // OrientationVectorDegrees is the orientation vector between two objects, but expressed in degrees rather than radians.
@@ -47,7 +48,7 @@ type OrientationVectorDegrees struct {
 	OX    float64      `json:"x"`
 	OY    float64      `json:"y"`
 	OZ    float64      `json:"z"`
-	Axis  PointingAxis `json:"pointing_axis,omitempty"`
+	Axis  pointingAxis `json:"pointing_axis,omitempty"`
 }
 
 // NewOrientationVector Creates a zero-initialized OrientationVector.
@@ -81,6 +82,8 @@ func (ov *OrientationVector) ToQuat() quat.Number {
 	switch ov.Axis {
 	case YAxis:
 		return ov.toQuatPointingInYAxis()
+	case ZAxis:
+		return ov.toQuatPointingInZAxis()
 	default: // pointing in Z-Axis is the default
 		return ov.toQuatPointingInZAxis()
 	}

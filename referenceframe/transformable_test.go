@@ -11,7 +11,7 @@ import (
 )
 
 func TestPoseInFrame(t *testing.T) {
-	pose := spatial.NewPose(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+	pose := spatial.NewPose(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1, spatial.ZAxis})
 	pF := NewPoseInFrame("frame", pose)
 	test.That(t, pF.Parent(), test.ShouldEqual, "frame")
 	test.That(t, spatial.PoseAlmostEqual(pF.Pose(), pose), test.ShouldBeTrue)
@@ -21,7 +21,7 @@ func TestPoseInFrame(t *testing.T) {
 }
 
 func TestGeometriesInFrame(t *testing.T) {
-	pose := spatial.NewPose(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1})
+	pose := spatial.NewPose(r3.Vector{1, 2, 3}, &spatial.OrientationVector{math.Pi / 2, 0, 0, -1, spatial.ZAxis})
 	zero, err := spatial.NewBox(pose, r3.Vector{1, 2, 3}, "zero")
 	test.That(t, err, test.ShouldBeNil)
 	one, err := spatial.NewBox(pose, r3.Vector{2, 3, 4}, "one")

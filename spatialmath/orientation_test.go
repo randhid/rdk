@@ -20,8 +20,8 @@ var (
 	// in euler angle representation.
 	ea45x = &EulerAngles{Roll: th, Pitch: 0, Yaw: 0}
 	// in orientation vector representation.
-	ov45x  = &OrientationVector{2. * th, 0., -math.Sqrt(2) / 2., math.Sqrt(2) / 2.}
-	ovd45x = &OrientationVectorDegrees{2 * utils.RadToDeg(th), 0., -math.Sqrt(2) / 2, math.Sqrt(2) / 2}
+	ov45x  = &OrientationVector{2. * th, 0., -math.Sqrt(2) / 2., math.Sqrt(2) / 2., ZAxis}
+	ovd45x = &OrientationVectorDegrees{2 * utils.RadToDeg(th), 0., -math.Sqrt(2) / 2, math.Sqrt(2) / 2, ZAxis}
 	// in rotation matrix representation.
 	rm45x = &RotationMatrix{[9]float64{1, 0, 0, 0, math.Cos(th), math.Sin(th), 0, -math.Sin(th), math.Cos(th)}}
 )

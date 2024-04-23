@@ -564,7 +564,7 @@ func TestCapsuleVsBoxCollision(t *testing.T) {
 		{
 			"separated edge closest",
 			[2]Geometry{
-				makeTestCapsule(&OrientationVector{0, 0, 1, 1}, r3.Vector{0, 4, 4}, 1, 4*math.Sqrt2),
+				makeTestCapsule(&OrientationVector{0, 0, 1, 1, ZAxis}, r3.Vector{0, 4, 4}, 1, 4*math.Sqrt2),
 				makeTestBox(NewZeroOrientation(), r3.Vector{}, r3.Vector{2, 2, 2}, ""),
 			},
 			math.Sqrt2,
@@ -572,7 +572,7 @@ func TestCapsuleVsBoxCollision(t *testing.T) {
 		{
 			"separated vertex closest",
 			[2]Geometry{
-				makeTestCapsule(&OrientationVector{0, 2, 2, 2}, r3.Vector{4, 4, 4}, 1, 4*math.Sqrt(3)),
+				makeTestCapsule(&OrientationVector{0, 2, 2, 2, ZAxis}, r3.Vector{4, 4, 4}, 1, 4*math.Sqrt(3)),
 				makeTestBox(NewZeroOrientation(), r3.Vector{}, r3.Vector{2, 2, 2}, ""),
 			},
 			math.Sqrt(3),
@@ -588,7 +588,7 @@ func TestCapsuleVsBoxCollision(t *testing.T) {
 		{
 			"edge tangent to capsule cylinder",
 			[2]Geometry{
-				makeTestCapsule(&OrientationVector{0, 0, -2, 2}, r3.Vector{0, 3, 0}, math.Sqrt2/2, 6),
+				makeTestCapsule(&OrientationVector{0, 0, -2, 2, ZAxis}, r3.Vector{0, 3, 0}, math.Sqrt2/2, 6),
 				makeTestBox(NewZeroOrientation(), r3.Vector{}, r3.Vector{2, 2, 2}, ""),
 			},
 			0,
@@ -621,7 +621,7 @@ func TestCapsuleVsBoxCollision(t *testing.T) {
 			geometryComparisonTestCase{
 				"colliding face closest",
 				[2]Geometry{
-					makeTestCapsule(&OrientationVector{0, norm.X, norm.Y, norm.Z}, r3.Vector{adjust(norm.X), adjust(norm.Y), adjust(norm.Z)}, 1, 4),
+					makeTestCapsule(&OrientationVector{0, norm.X, norm.Y, norm.Z, ZAxis}, r3.Vector{adjust(norm.X), adjust(norm.Y), adjust(norm.Z)}, 1, 4),
 					makeTestBox(NewZeroOrientation(), r3.Vector{}, r3.Vector{2, 2, 2}, ""),
 				},
 				-1e-3,
@@ -644,7 +644,7 @@ func TestCapsuleVsCapsuleCollision(t *testing.T) {
 		{
 			"separated cylinders closest",
 			[2]Geometry{
-				makeTestCapsule(&OrientationVector{0, 0, 0, -1}, r3.Vector{0, 0, -2 - 1e-3}, 1, 4),
+				makeTestCapsule(&OrientationVector{0, 0, 0, -1, ZAxis}, r3.Vector{0, 0, -2 - 1e-3}, 1, 4),
 				makeTestCapsule(NewZeroOrientation(), r3.Vector{0, 0, 2}, 1, 4),
 			},
 			1e-3,
@@ -652,7 +652,7 @@ func TestCapsuleVsCapsuleCollision(t *testing.T) {
 		{
 			"separated cylinder closest to end",
 			[2]Geometry{
-				makeTestCapsule(&OrientationVector{0, 1, 1, 0}, r3.Vector{0, 0, -1}, 1, 10),
+				makeTestCapsule(&OrientationVector{0, 1, 1, 0, ZAxis}, r3.Vector{0, 0, -1}, 1, 10),
 				makeTestCapsule(NewZeroOrientation(), r3.Vector{0, 0, 2 + 1e-3}, 1, 4),
 			},
 			1e-3,
@@ -669,7 +669,7 @@ func TestCapsuleVsCapsuleCollision(t *testing.T) {
 			"orthogonal cylinders touching",
 			[2]Geometry{
 				makeTestCapsule(NewZeroOrientation(), r3.Vector{0, 0, 0}, 1, 6),
-				makeTestCapsule(&OrientationVector{0, 1, 0, 0}, r3.Vector{0, 2, 0}, 1, 6),
+				makeTestCapsule(&OrientationVector{0, 1, 0, 0, ZAxis}, r3.Vector{0, 2, 0}, 1, 6),
 			},
 			0,
 		},
@@ -677,7 +677,7 @@ func TestCapsuleVsCapsuleCollision(t *testing.T) {
 			"orthogonal cylinders slightly colliding",
 			[2]Geometry{
 				makeTestCapsule(NewZeroOrientation(), r3.Vector{0, 0, 0}, 1, 6),
-				makeTestCapsule(&OrientationVector{0, 1, 0, 0}, r3.Vector{0, 1.8, 0}, 1, 6),
+				makeTestCapsule(&OrientationVector{0, 1, 0, 0, ZAxis}, r3.Vector{0, 1.8, 0}, 1, 6),
 			},
 			-0.2,
 		},

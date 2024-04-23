@@ -63,15 +63,15 @@ func TestAxisAngleRoundTrip(t *testing.T) {
 
 func TestOrientationVectorRoundTrip(t *testing.T) {
 	data := []OrientationVector{
-		{1, 1, 1, 1},
-		{1, 1, 0, 0},
-		{1, 0, 1, 0},
-		{1, 0, 0, 1},
+		{1, 1, 1, 1, ZAxis},
+		{1, 1, 0, 0, ZAxis},
+		{1, 0, 1, 0, ZAxis},
+		{1, 0, 0, 1, ZAxis},
 	}
 
 	r := rand.New(rand.NewSource(517))
 	for len(data) < 100 {
-		data = append(data, OrientationVector{rrpi(r), rrpi(r), rrpi(r), rrpi(r)})
+		data = append(data, OrientationVector{rrpi(r), rrpi(r), rrpi(r), rrpi(r), ZAxis})
 	}
 
 	for _, d := range data {
@@ -128,7 +128,7 @@ func TestOVToEuler(t *testing.T) {
 	}
 
 	data := []p{
-		{OrientationVectorDegrees{90, 0, 1, 0}, EulerAngles{math.Pi / 2, 0, math.Pi}},
+		{OrientationVectorDegrees{90, 0, 1, 0, ZAxis}, EulerAngles{math.Pi / 2, 0, math.Pi}},
 	}
 
 	for _, d := range data {

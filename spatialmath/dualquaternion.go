@@ -63,7 +63,7 @@ func newDualQuaternionFromDH(a, d, alpha float64) *dualQuaternion {
 // newDualQuaternionFromProtobuf returns a pointer to a new dualQuaternion object whose rotation quaternion is set from a provided
 // protobuf pose.
 func newDualQuaternionFromProtobuf(pos *commonpb.Pose) *dualQuaternion {
-	q := newDualQuaternionFromRotation(&OrientationVectorDegrees{pos.Theta, pos.OX, pos.OY, pos.OZ})
+	q := newDualQuaternionFromRotation(&OrientationVectorDegrees{pos.Theta, pos.OX, pos.OY, pos.OZ, ZAxis})
 	q.SetTranslation(r3.Vector{pos.X, pos.Y, pos.Z})
 	return q
 }
