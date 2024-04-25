@@ -90,7 +90,34 @@ func (ov *OrientationVector) ToQuat() quat.Number {
 }
 
 func (ov *OrientationVector) toQuatPointingInYAxis() quat.Number {
-	return quat.Number{}
+
+	// make sure OrientationVector is normalized first
+	ov.Normalize()
+
+	// acos(rz) ranges from 0 (north pole) to pi (south pole)
+	lat := math.Acos(ov.OY)
+
+	// If we're pointing at the Z axis then lon is 0, theta is the OV theta
+	// Euler angles are gimbal locked here but OV allows us to have smooth(er) movement
+	// Since euler angles are used to represent a single orientation, but not to move between different ones, this is OK
+	lon := 0.0
+	theta := ov.Theta
+
+	if 1-math.Abs(ov.OY) > defaultAngleEpsilon {
+		// If we are not at a pole, we need the longitude
+		// atan x/y removes some sign information so we use atan2 to do it properly
+		lon = math.Atan2(ov.OZ, ov.OX)
+	}
+
+	var q quat.Number
+	// Since the "default" orientation is pointed at the Z axis, we use ZYZ rotation order to properly represent the OV
+	q1 := mgl64.AnglesToQuat(lon, lat, theta, mgl64.YZY)
+	q.Real = q1.W
+	q.Imag = q1.X()
+	q.Jmag = q1.Y()
+	q.Kmag = q1.Z()
+
+	return q
 }
 
 func (ov *OrientationVector) toQuatPointingInZAxis() quat.Number {
@@ -186,6 +213,11 @@ func (ov *OrientationVector) RotationMatrix() *RotationMatrix {
 // NewOrientationVectorDegrees Creates a zero-initialized OrientationVectorDegrees.
 func NewOrientationVectorDegrees() *OrientationVectorDegrees {
 	return &OrientationVectorDegrees{Theta: 0, OX: 0, OY: 0, OZ: 1}
+}
+
+// NewOrientationVectorDegrees Creates a zero-initialized OrientationVectorDegrees.
+func NewYPointingOrientationVectorDegrees() *OrientationVectorDegrees {
+	return &OrientationVectorDegrees{Theta: 0, OX: 0, OY: 1, OZ: 0, Axis: YAxis}
 }
 
 // Radians converts a OrientationVectorDegrees to an OrientationVector.
