@@ -1,6 +1,7 @@
 package gpsutils
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -8,7 +9,6 @@ import (
 
 	"github.com/adrianmo/go-nmea"
 	geo "github.com/kellydunn/golang-geo"
-	"github.com/pkg/errors"
 	"go.uber.org/multierr"
 )
 

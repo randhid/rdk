@@ -6,12 +6,12 @@ package pca9685
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	pb "go.viam.com/api/component/board/v1"
 	"go.viam.com/utils"
 
