@@ -2,11 +2,10 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/logging"
 )
@@ -76,7 +75,7 @@ func newDerivative(config BlockConfig, logger logging.Logger) (Block, error) {
 
 func derive(x []float64, dt time.Duration, stencil *derivativeStencil) (float64, error) {
 	if len(x) != len(stencil.Coeffs) {
-		return 0.0, errors.Errorf("expected %d inputs got %d", len(stencil.Coeffs), len(x))
+		return 0.0, fmt.Errorf("expected %d inputs got %d", len(stencil.Coeffs), len(x))
 	}
 	y := 0.0
 	for i, coeff := range stencil.Coeffs {
@@ -106,10 +105,10 @@ func (d *derivative) Next(ctx context.Context, x []*Signal, dt time.Duration) ([
 
 func (d *derivative) reset() error {
 	if !d.cfg.Attribute.Has("derive_type") {
-		return errors.Errorf("derive block %s doesn't have a derive_type field", d.cfg.Name)
+		return fmt.Errorf("derive block %s doesn't have a derive_type field", d.cfg.Name)
 	}
 	if len(d.cfg.DependsOn) != 1 {
-		return errors.Errorf("derive block %s only supports one input got %d", d.cfg.Name, len(d.cfg.DependsOn))
+		return fmt.Errorf("derive block %s only supports one input got %d", d.cfg.Name, len(d.cfg.DependsOn))
 	}
 	switch finiteDifferenceType(d.cfg.Attribute["derive_type"].(string)) {
 	case backward1st1:
@@ -123,7 +122,7 @@ func (d *derivative) reset() error {
 	case backward2nd2:
 		d.stencil = backward2nd2Stencil
 	default:
-		return errors.Errorf("unsupported derive_type %s for block %s", d.cfg.Attribute["derive_type"].(string), d.cfg.Name)
+		return fmt.Errorf("unsupported derive_type %s for block %s", d.cfg.Attribute["derive_type"].(string), d.cfg.Name)
 	}
 	d.px = make([][]float64, len(d.cfg.DependsOn))
 	d.y = make([]*Signal, len(d.cfg.DependsOn))

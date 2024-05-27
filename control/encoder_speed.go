@@ -2,10 +2,9 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/logging"
 )
@@ -36,10 +35,10 @@ func (b *encoderToRPM) Next(ctx context.Context, x []*Signal, dt time.Duration) 
 
 func (b *encoderToRPM) reset() error {
 	if !b.cfg.Attribute.Has("ticks_per_revolution") {
-		return errors.Errorf("encoderToRPM block %s doesn't have a ticks_per_revolution field", b.cfg.Name)
+		return fmt.Errorf("encoderToRPM block %s doesn't have a ticks_per_revolution field", b.cfg.Name)
 	}
 	if len(b.cfg.DependsOn) != 1 {
-		return errors.Errorf("invalid number of inputs for encoderToRPM block %s expected 1 got %d", b.cfg.Name, len(b.cfg.DependsOn))
+		return fmt.Errorf("invalid number of inputs for encoderToRPM block %s expected 1 got %d", b.cfg.Name, len(b.cfg.DependsOn))
 	}
 	b.ticksPerRevolution = b.cfg.Attribute["ticks_per_revolution"].(int) // default 0
 	b.prevEncCount = 0

@@ -1,9 +1,8 @@
 package control
 
 import (
+	"errors"
 	"math"
-
-	"github.com/pkg/errors"
 )
 
 // All IIR filters are implemented as y[n] = a_0*x[n] + a_1*x[n-1] + ... + a_n*x[n] - ( b_1*y[n-1] + b_2*y[n-2] + ... + b_n*y[n])

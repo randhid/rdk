@@ -2,12 +2,13 @@ package control
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/pkg/errors"
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/logging"
@@ -76,7 +77,7 @@ func createLoop(logger logging.Logger, cfg Config, m Controllable) (*Loop, error
 		for _, dep := range b.blk.Config(l.cancelCtx).DependsOn {
 			blockDep, ok := l.blocks[dep]
 			if !ok {
-				return nil, errors.Errorf("block %s depends on %s but it does not exist", b.blk.Config(l.cancelCtx).Name, dep)
+				return nil, fmt.Errorf("block %s depends on %s but it does not exist", b.blk.Config(l.cancelCtx).Name, dep)
 			}
 			blockDep.outs = append(blockDep.outs, make(chan []*Signal))
 			b.ins = append(b.ins, blockDep.outs[len(blockDep.outs)-1])
@@ -165,7 +166,7 @@ func createLoop(logger logging.Logger, cfg Config, m Controllable) (*Loop, error
 func (l *Loop) OutputAt(ctx context.Context, name string) ([]*Signal, error) {
 	blk, ok := l.blocks[name]
 	if !ok {
-		return []*Signal{}, errors.Errorf("cannot return Signals for nonexistent %s", name)
+		return []*Signal{}, fmt.Errorf("cannot return Signals for nonexistent %s", name)
 	}
 	return blk.blk.Output(ctx), nil
 }
@@ -174,7 +175,7 @@ func (l *Loop) OutputAt(ctx context.Context, name string) ([]*Signal, error) {
 func (l *Loop) ConfigAt(ctx context.Context, name string) (BlockConfig, error) {
 	blk, ok := l.blocks[name]
 	if !ok {
-		return BlockConfig{}, errors.Errorf("cannot return Config for nonexistent %s", name)
+		return BlockConfig{}, fmt.Errorf("cannot return Config for nonexistent %s", name)
 	}
 	return blk.blk.Config(ctx), nil
 }
@@ -194,7 +195,7 @@ func (l *Loop) ConfigsAtType(ctx context.Context, bType string) []BlockConfig {
 func (l *Loop) SetConfigAt(ctx context.Context, name string, config BlockConfig) error {
 	blk, ok := l.blocks[name]
 	if !ok {
-		return errors.Errorf("cannot return Config for nonexistent %s", name)
+		return fmt.Errorf("cannot return Config for nonexistent %s", name)
 	}
 	return blk.blk.UpdateConfig(ctx, config)
 }

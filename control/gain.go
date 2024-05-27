@@ -2,10 +2,9 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/logging"
 )
@@ -40,10 +39,10 @@ func (b *gain) Next(ctx context.Context, x []*Signal, dt time.Duration) ([]*Sign
 
 func (b *gain) reset() error {
 	if !b.cfg.Attribute.Has("gain") {
-		return errors.Errorf("gain block %s doesn't have a gain field", b.cfg.Name)
+		return fmt.Errorf("gain block %s doesn't have a gain field", b.cfg.Name)
 	}
 	if len(b.cfg.DependsOn) != 1 {
-		return errors.Errorf("invalid number of inputs for gain block %s expected 1 got %d", b.cfg.Name, len(b.cfg.DependsOn))
+		return fmt.Errorf("invalid number of inputs for gain block %s expected 1 got %d", b.cfg.Name, len(b.cfg.DependsOn))
 	}
 	b.gain = b.cfg.Attribute["gain"].(float64)
 	if b.gain == 0 {

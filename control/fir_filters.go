@@ -1,9 +1,8 @@
 package control
 
 import (
+	"errors"
 	"math"
-
-	"github.com/pkg/errors"
 )
 
 type movingAverageFilter struct {

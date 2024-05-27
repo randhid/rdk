@@ -2,11 +2,10 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/logging"
 )
@@ -90,10 +89,10 @@ func (p *basicPID) reset() error {
 	if !p.cfg.Attribute.Has("kI") &&
 		!p.cfg.Attribute.Has("kD") &&
 		!p.cfg.Attribute.Has("kP") {
-		return errors.Errorf("pid block %s should have at least one kI, kP or kD field", p.cfg.Name)
+		return fmt.Errorf("pid block %s should have at least one kI, kP or kD field", p.cfg.Name)
 	}
 	if len(p.cfg.DependsOn) != 1 {
-		return errors.Errorf("pid block %s should have 1 input got %d", p.cfg.Name, len(p.cfg.DependsOn))
+		return fmt.Errorf("pid block %s should have 1 input got %d", p.cfg.Name, len(p.cfg.DependsOn))
 	}
 	p.kI = p.cfg.Attribute["kI"].(float64)
 	p.kD = p.cfg.Attribute["kD"].(float64)
@@ -152,7 +151,7 @@ func (p *basicPID) reset() error {
 			return err
 		}
 		if p.tuner.stepPct > 1 || p.tuner.stepPct < 0 {
-			return errors.Errorf("tuner pid block %s should have a percentage value between 0-1 for TuneStepPct", p.cfg.Name)
+			return fmt.Errorf("tuner pid block %s should have a percentage value between 0-1 for TuneStepPct", p.cfg.Name)
 		}
 		p.tuning = true
 	}

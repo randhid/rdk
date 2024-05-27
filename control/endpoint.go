@@ -2,10 +2,9 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/logging"
 )
@@ -74,7 +73,7 @@ func (e *endpoint) reset() error {
 	}
 
 	if !motorOk && !baseOk {
-		return errors.Errorf("endpoint %s should have a motor_name field", e.cfg.Name)
+		return fmt.Errorf("endpoint %s should have a motor_name field", e.cfg.Name)
 	}
 
 	return nil

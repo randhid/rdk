@@ -2,11 +2,10 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/logging"
 )
@@ -102,10 +101,10 @@ func (s *trapezoidVelocityGenerator) Next(ctx context.Context, x []*Signal, dt t
 
 func (s *trapezoidVelocityGenerator) reset() error {
 	if !s.cfg.Attribute.Has("max_acc") {
-		return errors.Errorf("trapezoidale velocity profile block %s needs max_acc field", s.cfg.Name)
+		return fmt.Errorf("trapezoidal velocity profile block %s needs max_acc field", s.cfg.Name)
 	}
 	if !s.cfg.Attribute.Has("max_vel") {
-		return errors.Errorf("trapezoidale velocity profile block %s needs max_vel field", s.cfg.Name)
+		return fmt.Errorf("trapezoidale velocity profile block %s needs max_vel field", s.cfg.Name)
 	}
 	s.maxAcc = s.cfg.Attribute["max_acc"].(float64) // default 0.0
 	s.maxVel = s.cfg.Attribute["max_vel"].(float64) // default 0.0

@@ -2,9 +2,8 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/utils"
@@ -108,5 +107,5 @@ func (l *Loop) createBlock(cfg BlockConfig, logger logging.Logger) (Block, error
 		}
 		return b, nil
 	}
-	return nil, errors.Errorf("unsupported block type %s", t)
+	return nil, fmt.Errorf("unsupported block type %s", t)
 }
