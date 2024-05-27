@@ -368,13 +368,13 @@ func (pi *piPigpio) reconfigureInterrupts(ctx context.Context, cfg *Config) erro
 		name, ok := findInterruptName(interrupt, oldInterrupts)
 		if !ok {
 			// This should never happen
-			return fmt.Errorf("Logic bug: found old interrupt %s without old name!?", interrupt)
+			return fmt.Errorf("logic bug: found old interrupt %s without old name!?", interrupt)
 		}
 
 		bcom, ok := findInterruptBcom(interrupt, oldInterruptsHW)
 		if !ok {
 			// This should never happen, either
-			return fmt.Errorf("Logic bug: found old interrupt %s without old bcom!?", interrupt)
+			return fmt.Errorf("logic bug: found old interrupt %s without old bcom!?", interrupt)
 		}
 
 		if expectedBcom, ok := broadcomPinFromHardwareLabel(name); ok && bcom == expectedBcom {
@@ -705,7 +705,7 @@ func (pi *piPigpio) DigitalInterruptByName(name string) (board.DigitalInterrupt,
 			}
 			if result := C.setupInterrupt(C.int(bcom)); result != 0 {
 				err := picommon.ConvertErrorCodeToMessage(int(result), "error")
-				return nil, fmt.Errorf("Unable to set up interrupt on pin %s: %s", name, err)
+				return nil, fmt.Errorf("unable to set up interrupt on pin %s: %w", name, err)
 			}
 
 			pi.interrupts[name] = d

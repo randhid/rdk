@@ -162,7 +162,7 @@ func makeMpu6050(
 	// To do this, we set register 107 to 0.
 	err = sensor.writeByte(ctx, 107, 0)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to wake up MPU6050: '%s'", err.Error())
+		return nil, fmt.Errorf("unable to wake up MPU6050: '%s'", err.Error())
 	}
 
 	// Now, turn on the background goroutine that constantly reads from the chip and stores data in

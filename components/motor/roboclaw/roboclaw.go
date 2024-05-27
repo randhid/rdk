@@ -69,15 +69,16 @@ func (conf *Config) Validate(path string) ([]string, error) {
 		return nil, resource.NewConfigValidationFieldRequiredError(path, "serial_path")
 	}
 	if conf.Address != 0 && (conf.Address < 128 || conf.Address > 135) {
-		return nil, errors.New("serial address must be between 128 and 135")
+		return nil, errors.New("address must be between 128 and 135")
 	}
 
 	if conf.TicksPerRotation < 0 {
-		return nil, resource.NewConfigValidationError(path, errors.New("Ticks Per Rotation must be a positive number"))
+		return nil, resource.NewConfigValidationError(path, errors.New("ticks_per_rotation must be a positive number"))
 	}
 
 	if !rutils.ValidateBaudRate(validBaudRates, conf.SerialBaud) {
-		return nil, resource.NewConfigValidationError(path, fmt.Errorf("Baud rate invalid, must be one of these values: %v", validBaudRates))
+		return nil, resource.NewConfigValidationError(path,
+			fmt.Errorf("serial_baud_rate invalid, must be one of these values: %v", validBaudRates))
 	}
 	return nil, nil
 }

@@ -112,7 +112,7 @@ func NewMotor(ctx context.Context, deps resource.Dependencies, c *Config, name r
 
 	flowRate, err := m.findMaxFlowRate(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("can't find max flow rate: %v", err)
+		return nil, fmt.Errorf("can't find max flow rate: %w", err)
 	}
 	m.maxFlowRate = flowRate
 
