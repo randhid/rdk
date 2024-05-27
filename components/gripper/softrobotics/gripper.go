@@ -3,6 +3,7 @@ package softrobotics
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
@@ -47,7 +48,7 @@ func (cfg *Config) Validate(path string) ([]string, error) {
 
 	if cfg.AnalogReader != "psi" {
 		return nil, resource.NewConfigValidationError(path,
-			errors.Errorf("analog_reader %s on board must be created and called 'psi'", cfg.AnalogReader))
+			fmt.Errorf("analog_reader %s on board must be created and called 'psi'", cfg.AnalogReader))
 	}
 	deps = append(deps, cfg.Board)
 	return deps, nil

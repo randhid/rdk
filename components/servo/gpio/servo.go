@@ -3,6 +3,7 @@ package gpio
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -71,7 +72,7 @@ func (config *servoConfig) Validate(path string) ([]string, error) {
 		}
 		if *config.StartPos < minDeg || *config.StartPos > maxDeg {
 			return nil, resource.NewConfigValidationError(path,
-				errors.Errorf("starting_position_deg should be between minimum (%.1f) and maximum (%.1f) positions", minDeg, maxDeg))
+				fmt.Errorf("starting_position_deg should be between minimum (%.1f) and maximum (%.1f) positions", minDeg, maxDeg))
 		}
 	}
 
@@ -79,10 +80,10 @@ func (config *servoConfig) Validate(path string) ([]string, error) {
 		return nil, resource.NewConfigValidationError(path, errors.New("min_angle_deg cannot be lower than 0"))
 	}
 	if config.MinWidthUs != nil && *config.MinWidthUs < minWidthUs {
-		return nil, resource.NewConfigValidationError(path, errors.Errorf("min_width_us cannot be lower than %d", minWidthUs))
+		return nil, resource.NewConfigValidationError(path, fmt.Errorf("min_width_us cannot be lower than %d", minWidthUs))
 	}
 	if config.MaxWidthUs != nil && *config.MaxWidthUs > maxWidthUs {
-		return nil, resource.NewConfigValidationError(path, errors.Errorf("max_width_us cannot be higher than %d", maxWidthUs))
+		return nil, resource.NewConfigValidationError(path, fmt.Errorf("max_width_us cannot be higher than %d", maxWidthUs))
 	}
 	return deps, nil
 }
@@ -188,7 +189,7 @@ func (s *servoGPIO) Reconfigure(ctx context.Context, deps resource.Dependencies,
 
 	if newConf.Frequency != nil {
 		if *newConf.Frequency > 450 || *newConf.Frequency < 50 {
-			return errors.Errorf(
+			return fmt.Errorf(
 				"PWM frequencies should not be above 450Hz or below 50, have %d", newConf.Frequency)
 		}
 
@@ -288,7 +289,7 @@ func (s *servoGPIO) findPWMResolution(ctx context.Context) error {
 		if r2 == realPct {
 			currPct = r2
 		} else {
-			return errors.Errorf("giving up searching for the resolution tried to match %.7f but got %.7f", realPct, r2)
+			return fmt.Errorf("giving up searching for the resolution tried to match %.7f but got %.7f", realPct, r2)
 		}
 	}
 

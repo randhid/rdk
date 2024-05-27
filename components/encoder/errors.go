@@ -1,11 +1,15 @@
 package encoder
 
-import "github.com/pkg/errors"
+import (
+	"fmt"
+
+	"github.com/pkg/errors"
+)
 
 // NewPositionTypeUnsupportedError returns a standard error for when
 // an encoder does not support the given PositionType.
 func NewPositionTypeUnsupportedError(positionType PositionType) error {
-	return errors.Errorf("encoder does not support %q; use a different PositionType", positionType)
+	return fmt.Errorf("encoder does not support %q; use a different PositionType", positionType)
 }
 
 // NewEncodedMotorPositionTypeUnsupportedError returns a standard error for when

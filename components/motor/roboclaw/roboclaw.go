@@ -77,7 +77,7 @@ func (conf *Config) Validate(path string) ([]string, error) {
 	}
 
 	if !rutils.ValidateBaudRate(validBaudRates, conf.SerialBaud) {
-		return nil, resource.NewConfigValidationError(path, errors.Errorf("Baud rate invalid, must be one of these values: %v", validBaudRates))
+		return nil, resource.NewConfigValidationError(path, fmt.Errorf("Baud rate invalid, must be one of these values: %v", validBaudRates))
 	}
 	return nil, nil
 }

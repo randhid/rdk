@@ -6,6 +6,7 @@ package eva
 import (
 	"bytes"
 	"context"
+
 	// for embedding model file.
 	_ "embed"
 	"encoding/json"
@@ -260,7 +261,7 @@ func (e *eva) apiRequestRetry(
 			}
 		}
 
-		return errors.Errorf("got unexpected response code: %d for %s %s", res.StatusCode, fullPath, more)
+		return fmt.Errorf("got unexpected response code: %d for %s %s", res.StatusCode, fullPath, more)
 	}
 
 	if out == nil {
@@ -268,7 +269,7 @@ func (e *eva) apiRequestRetry(
 	}
 
 	if !strings.HasPrefix(res.Header["Content-Type"][0], "application/json") {
-		return errors.Errorf("expected json response from eva, got: %v", res.Header["Content-Type"])
+		return fmt.Errorf("expected json response from eva, got: %v", res.Header["Content-Type"])
 	}
 
 	decoder := json.NewDecoder(res.Body)

@@ -6,6 +6,7 @@ package pca9685
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -145,7 +146,7 @@ func (pca *PCA9685) parsePin(pin string) (int, error) {
 		return 0, err
 	}
 	if pinInt < 0 || int(pinInt) >= len(pca.gpioPins) {
-		return 0, errors.Errorf("channel number must be between [0, %d)", len(pca.gpioPins))
+		return 0, fmt.Errorf("channel number must be between [0, %d)", len(pca.gpioPins))
 	}
 	return int(pinInt), nil
 }

@@ -3,6 +3,7 @@ package ultrasonic
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -78,12 +79,12 @@ func NewSensor(ctx context.Context, deps resource.Dependencies,
 
 	res, ok := deps[board.Named(config.Board)]
 	if !ok {
-		return nil, errors.Errorf("ultrasonic: board %q missing from dependencies", config.Board)
+		return nil, fmt.Errorf("ultrasonic: board %q missing from dependencies", config.Board)
 	}
 
 	b, ok := res.(board.Board)
 	if !ok {
-		return nil, errors.Errorf("ultrasonic: cannot find board %q", config.Board)
+		return nil, fmt.Errorf("ultrasonic: cannot find board %q", config.Board)
 	}
 	s.board = b
 
@@ -137,7 +138,7 @@ func (s *Sensor) Readings(ctx context.Context, extra map[string]interface{}) (ma
 	// reconfigures itself because someone decided to rewire things.
 	echoInterrupt, err := s.board.DigitalInterruptByName(s.config.EchoInterrupt)
 	if err != nil {
-		return nil, multierr.Combine(errors.Errorf("ultrasonic: cannot grab digital interrupt %q", s.config.EchoInterrupt), err)
+		return nil, multierr.Combine(fmt.Errorf("ultrasonic: cannot grab digital interrupt %q", s.config.EchoInterrupt), err)
 	}
 	triggerPin, err := s.board.GPIOPinByName(s.config.TriggerPin)
 	if err != nil {
@@ -175,7 +176,7 @@ func (s *Sensor) Readings(ctx context.Context, extra map[string]interface{}) (ma
 		case <-s.cancelCtx.Done():
 			return nil, s.namedError(errors.New("ultrasonic: context canceled"))
 		case <-time.After(time.Millisecond * time.Duration(s.timeoutMs)):
-			return nil, s.namedError(errors.Errorf("timed out waiting for signal that %s", signalStr))
+			return nil, s.namedError(fmt.Errorf("timed out waiting for signal that %s", signalStr))
 		}
 	}
 	timeB := ticks[0].TimestampNanosec

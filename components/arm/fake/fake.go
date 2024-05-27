@@ -3,6 +3,7 @@ package fake
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -239,7 +240,7 @@ func modelFromName(model, name string) (referenceframe.Model, error) {
 	case eva.Model.Name:
 		return eva.MakeModelFrame(name)
 	default:
-		return nil, errors.Errorf("fake arm cannot be created, unsupported arm-model: %s", model)
+		return nil, fmt.Errorf("fake arm cannot be created, unsupported arm-model: %s", model)
 	}
 }
 

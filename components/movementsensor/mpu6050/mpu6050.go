@@ -93,7 +93,7 @@ func addressReadError(err error, address byte, bus string) error {
 }
 
 func unexpectedDeviceError(address, defaultAddress byte) error {
-	return errors.Errorf("unexpected non-MPU6050 device at address %d: response '%d'",
+	return fmt.Errorf("unexpected non-MPU6050 device at address %d: response '%d'",
 		address, defaultAddress)
 }
 
@@ -162,7 +162,7 @@ func makeMpu6050(
 	// To do this, we set register 107 to 0.
 	err = sensor.writeByte(ctx, 107, 0)
 	if err != nil {
-		return nil, errors.Errorf("Unable to wake up MPU6050: '%s'", err.Error())
+		return nil, fmt.Errorf("Unable to wake up MPU6050: '%s'", err.Error())
 	}
 
 	// Now, turn on the background goroutine that constantly reads from the chip and stores data in

@@ -88,7 +88,7 @@ func (s *serviceServer) Chunks(req *pb.ChunksRequest, server pb.AudioInputServic
 	case pb.SampleFormat_SAMPLE_FORMAT_FLOAT32_INTERLEAVED:
 		sf = wave.Float32SampleFormat
 	default:
-		return errors.Errorf("unknown type of audio sample format %v", req.SampleFormat)
+		return fmt.Errorf("unknown type of audio sample format %v", req.SampleFormat)
 	}
 
 	if err := server.Send(&pb.ChunksResponse{
@@ -145,7 +145,7 @@ func (s *serviceServer) Chunks(req *pb.ChunksRequest, server pb.AudioInputServic
 				return err
 			}
 		default:
-			return errors.Errorf("unknown type of audio buffer %T", chunk)
+			return fmt.Errorf("unknown type of audio buffer %T", chunk)
 		}
 
 		return server.Send(&pb.ChunksResponse{
@@ -281,7 +281,7 @@ func (s *serviceServer) Record(
 
 			return wavEnc.Write(buf.AsIntBuffer())
 		default:
-			return errors.Errorf("unknown type of audio buffer %T", chunk)
+			return fmt.Errorf("unknown type of audio buffer %T", chunk)
 		}
 	}
 	numChunks := int(duration.Seconds() * float64(info.SamplingRate/info.Len))

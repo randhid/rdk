@@ -15,6 +15,6 @@ func AddressReadError(err error, address byte, bus string) error {
 // UnexpectedDeviceError returns a standard error for we cannot find the expected device
 // at the given address.
 func UnexpectedDeviceError(address, response byte, deviceName string) error {
-	return errors.Errorf("unexpected non-%s device at address %d: response '%d'",
+	return fmt.Errorf("unexpected non-%s device at address %d: response '%d'",
 		deviceName, address, response)
 }

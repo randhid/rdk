@@ -171,10 +171,10 @@ func (jcd *joinColorDepth) NextPointCloud(ctx context.Context) (pointcloud.Point
 	}
 	col, dm := camera.SimultaneousColorDepthNext(ctx, jcd.color, jcd.depth)
 	if col == nil {
-		return nil, errors.Errorf("could not get color image from source camera %q for join_color_depth camera", jcd.colorName)
+		return nil, fmt.Errorf("could not get color image from source camera %q for join_color_depth camera", jcd.colorName)
 	}
 	if dm == nil {
-		return nil, errors.Errorf("could not get depth image from source camera %q for join_color_depth camera", jcd.depthName)
+		return nil, fmt.Errorf("could not get depth image from source camera %q for join_color_depth camera", jcd.depthName)
 	}
 	return jcd.projector.RGBDToPointCloud(rimage.ConvertImage(col), dm)
 }

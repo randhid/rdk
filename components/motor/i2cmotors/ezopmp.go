@@ -6,6 +6,7 @@ package ezopmp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -111,7 +112,7 @@ func NewMotor(ctx context.Context, deps resource.Dependencies, c *Config, name r
 
 	flowRate, err := m.findMaxFlowRate(ctx)
 	if err != nil {
-		return nil, errors.Errorf("can't find max flow rate: %v", err)
+		return nil, fmt.Errorf("can't find max flow rate: %v", err)
 	}
 	m.maxFlowRate = flowRate
 
@@ -208,7 +209,7 @@ func (m *Ezopmp) readReg(ctx context.Context) ([]byte, error) {
 	case 254:
 		return nil, errors.New("data not ready, code: 254")
 	default:
-		return nil, errors.Errorf("error code not understood %b", readVal[0])
+		return nil, fmt.Errorf("error code not understood %b", readVal[0])
 	}
 }
 

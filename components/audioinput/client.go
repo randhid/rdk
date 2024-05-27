@@ -2,6 +2,7 @@ package audioinput
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -166,7 +167,7 @@ func (c *client) Stream(
 				case pb.SampleFormat_SAMPLE_FORMAT_UNSPECIFIED:
 					fallthrough
 				default:
-					nextErr = errors.Errorf("unknown type of audio sample format %v", infoProto.SampleFormat)
+					nextErr = fmt.Errorf("unknown type of audio sample format %v", infoProto.SampleFormat)
 				}
 			}
 

@@ -215,7 +215,7 @@ func (g *singleAxis) Reconfigure(ctx context.Context, deps resource.Dependencies
 		}
 	}
 	if len(newConf.LimitSwitchPins) > 2 {
-		return errors.Errorf("invalid gantry type: need 1, 2 or 0 pins per axis, have %v pins", len(newConf.LimitSwitchPins))
+		return fmt.Errorf("invalid gantry type: need 1, 2 or 0 pins per axis, have %v pins", len(newConf.LimitSwitchPins))
 	}
 
 	if needsToReHome {
@@ -455,7 +455,7 @@ func (g *singleAxis) testLimit(ctx context.Context, pin int) (float64, error) {
 			if err != nil {
 				return 0, err
 			}
-			return 0, errors.Errorf(
+			return 0, fmt.Errorf(
 				"expected limit switch %v but hit limit switch %v, try switching the order in the config",
 				pin,
 				wrongPin)
@@ -468,7 +468,7 @@ func (g *singleAxis) testLimit(ctx context.Context, pin int) (float64, error) {
 			homingTimeout = time.Duration((1 / (g.rpm / 60e9 * g.mmPerRevolution / g.lengthMm) * 5))
 		}
 		if elapsed > (homingTimeout) {
-			return 0, errors.Errorf("gantry timed out testing limit, timeout = %v", homingTimeout)
+			return 0, fmt.Errorf("gantry timed out testing limit, timeout = %v", homingTimeout)
 		}
 
 		if !utils.SelectContextOrWait(ctx, time.Millisecond*10) {
@@ -515,7 +515,7 @@ func (g *singleAxis) Lengths(ctx context.Context, extra map[string]interface{}) 
 // MoveToPosition moves along an axis using inputs in millimeters.
 func (g *singleAxis) MoveToPosition(ctx context.Context, positions, speeds []float64, extra map[string]interface{}) error {
 	if g.positionRange == 0 {
-		return errors.Errorf("cannot move to position until gantry '%v' is homed", g.Named.Name().ShortName())
+		return fmt.Errorf("cannot move to position until gantry '%v' is homed", g.Named.Name().ShortName())
 	}
 	ctx, done := g.opMgr.New(ctx)
 	defer done()

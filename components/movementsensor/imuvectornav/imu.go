@@ -6,6 +6,7 @@ package imuvectornav
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"time"
 
@@ -364,7 +365,7 @@ func (vn *vectornav) readRegisterSPI(ctx context.Context, reg vectornavRegister,
 		return nil, err
 	}
 	if out[3] != 0 {
-		return nil, errors.Errorf("vectornav read error returned %d speed was %d", out[3], vn.speed)
+		return nil, fmt.Errorf("vectornav read error returned %d speed was %d", out[3], vn.speed)
 	}
 	err = hnd.Close()
 	if err != nil {
@@ -397,7 +398,7 @@ func (vn *vectornav) writeRegisterSPI(ctx context.Context, reg vectornavRegister
 		return err
 	}
 	if out[3] != 0 {
-		return errors.Errorf("vectornav write error returned %d", out[3])
+		return fmt.Errorf("vectornav write error returned %d", out[3])
 	}
 	err = hnd.Close()
 	if err != nil {
@@ -429,7 +430,7 @@ func (vn *vectornav) vectornavTareSPI(ctx context.Context) error {
 		return err
 	}
 	if out[3] != 0 {
-		return errors.Errorf("vectornav write error returned %d", out[3])
+		return fmt.Errorf("vectornav write error returned %d", out[3])
 	}
 	err = hnd.Close()
 	if err != nil {

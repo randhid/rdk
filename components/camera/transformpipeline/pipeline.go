@@ -76,7 +76,7 @@ func (cfg *transformConfig) Validate(path string) ([]string, error) {
 
 	if cfg.CameraParameters != nil {
 		if cfg.CameraParameters.Height < 0 || cfg.CameraParameters.Width < 0 {
-			return nil, errors.Errorf(
+			return nil, fmt.Errorf(
 				"got illegal negative dimensions for width_px and height_px (%d, %d) fields set in intrinsic_parameters for transform camera",
 				cfg.CameraParameters.Width, cfg.CameraParameters.Height,
 			)
@@ -170,7 +170,7 @@ func (tp transformPipeline) Close(ctx context.Context) error {
 		errs = multierr.Combine(errs, func() (err error) {
 			defer func() {
 				if panicErr := recover(); panicErr != nil {
-					err = multierr.Combine(err, errors.Errorf("panic: %v", panicErr))
+					err = multierr.Combine(err, fmt.Errorf("panic: %v", panicErr))
 				}
 			}()
 			return src.Close(ctx)

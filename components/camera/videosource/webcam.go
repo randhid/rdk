@@ -406,7 +406,7 @@ func tryWebcamOpen(
 			return nil, err
 		}
 		if img.Bounds().Dx() != conf.Width || img.Bounds().Dy() != conf.Height {
-			return nil, errors.Errorf("requested width and height (%dx%d) are not available for this webcam"+
+			return nil, fmt.Errorf("requested width and height (%dx%d) are not available for this webcam"+
 				" (closest driver found by gostream supports resolution %dx%d)",
 				conf.Width, conf.Height, img.Bounds().Dx(), img.Bounds().Dy())
 		}

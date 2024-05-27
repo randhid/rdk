@@ -2,6 +2,7 @@ package transformpipeline
 
 import (
 	"context"
+	"fmt"
 	"image"
 
 	"github.com/pkg/errors"
@@ -78,7 +79,7 @@ func (us *undistortSource) Read(ctx context.Context) (image.Image, func(), error
 		}
 		return depth, release, nil
 	default:
-		return nil, nil, errors.Errorf("do not know how to decode stream type %q", string(us.stream))
+		return nil, nil, fmt.Errorf("do not know how to decode stream type %q", string(us.stream))
 	}
 }
 

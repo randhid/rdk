@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -125,11 +126,11 @@ func (conf *Config) Validate(path string) ([]string, error) {
 	}
 
 	if conf.Height%2 != 0 {
-		return nil, errors.Errorf("odd-number resolutions cannot be rendered, cannot use a height of %d", conf.Height)
+		return nil, fmt.Errorf("odd-number resolutions cannot be rendered, cannot use a height of %d", conf.Height)
 	}
 
 	if conf.Width%2 != 0 {
-		return nil, errors.Errorf("odd-number resolutions cannot be rendered, cannot use a width of %d", conf.Width)
+		return nil, fmt.Errorf("odd-number resolutions cannot be rendered, cannot use a width of %d", conf.Width)
 	}
 
 	return nil, nil

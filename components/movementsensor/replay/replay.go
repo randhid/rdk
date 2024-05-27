@@ -3,6 +3,7 @@ package replay
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -130,7 +131,7 @@ func (cfg *Config) Validate(path string) ([]string, error) {
 	}
 
 	if cfg.BatchSize != nil && (*cfg.BatchSize > uint64(maxCacheSize) || *cfg.BatchSize == 0) {
-		return nil, errors.Errorf("batch_size must be between 1 and %d", maxCacheSize)
+		return nil, fmt.Errorf("batch_size must be between 1 and %d", maxCacheSize)
 	}
 
 	return []string{cloud.InternalServiceName.String()}, nil

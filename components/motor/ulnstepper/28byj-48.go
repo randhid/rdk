@@ -19,6 +19,7 @@ package uln28byj
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -197,7 +198,7 @@ func (m *uln28byj) doRun(ctx context.Context) error {
 		err := m.doStep(ctx, m.stepPosition < m.targetStepPosition)
 		m.lock.Unlock()
 		if err != nil {
-			return errors.Errorf("error stepping %v", err)
+			return fmt.Errorf("error stepping %v", err)
 		}
 	}
 	return nil
@@ -266,7 +267,7 @@ func (m *uln28byj) GoFor(ctx context.Context, rpm, revolutions float64, extra ma
 
 	err := m.doRun(ctx)
 	if err != nil {
-		return errors.Errorf(" error while running motor %v", err)
+		return fmt.Errorf(" error while running motor %v", err)
 	}
 	return nil
 }
@@ -322,7 +323,7 @@ func (m *uln28byj) ResetZeroPosition(ctx context.Context, offset float64, extra 
 
 // SetPower is invalid for this motor.
 func (m *uln28byj) SetPower(ctx context.Context, powerPct float64, extra map[string]interface{}) error {
-	return errors.Errorf("raw power not supported in stepper motor (%s)", m.motorName)
+	return fmt.Errorf("raw power not supported in stepper motor (%s)", m.motorName)
 }
 
 // Position reports the current step position of the motor. If it's not supported, the returned

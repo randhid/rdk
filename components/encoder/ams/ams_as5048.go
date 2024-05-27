@@ -67,7 +67,7 @@ func (conf *Config) Validate(path string) ([]string, error) {
 	}
 	_, isSupported := supportedConnections[connType]
 	if !isSupported {
-		return nil, errors.Errorf("%s is not a supported connection type", connType)
+		return nil, fmt.Errorf("%s is not a supported connection type", connType)
 	}
 	if connType == i2cConn {
 		if conf.I2CConfig == nil {

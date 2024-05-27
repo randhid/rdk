@@ -3,6 +3,7 @@ package camera
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"sync"
 	"time"
@@ -273,7 +274,7 @@ func NewPinholeModelWithBrownConradyDistortion(pinholeCameraIntrinsics *transfor
 
 // NewPropertiesError returns an error specific to a failure in Properties.
 func NewPropertiesError(cameraIdentifier string) error {
-	return errors.Errorf("failed to get properties from %s", cameraIdentifier)
+	return fmt.Errorf("failed to get properties from %s", cameraIdentifier)
 }
 
 // WrapVideoSourceWithProjector creates a Camera either with or without a projector. The stream type

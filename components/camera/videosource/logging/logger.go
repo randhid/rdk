@@ -67,7 +67,7 @@ const (
 func NewLogger() (*Logger, error) {
 	// TODO: support non-Linux platforms
 	if runtime.GOOS != linux {
-		return nil, errors.Errorf("camera logger not supported on OS %s", runtime.GOOS)
+		return nil, fmt.Errorf("camera logger not supported on OS %s", runtime.GOOS)
 	}
 
 	dir := filepath.Dir(filePath)

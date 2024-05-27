@@ -2,6 +2,7 @@ package transformpipeline
 
 import (
 	"context"
+	"fmt"
 	"image"
 
 	"github.com/pkg/errors"
@@ -43,7 +44,7 @@ func newDepthToPrettyTransform(
 ) (gostream.VideoSource, camera.ImageType, error) {
 	if stream != camera.DepthStream {
 		return nil, camera.UnspecifiedStream,
-			errors.Errorf("source has stream type %s, depth_to_pretty only supports depth stream inputs", stream)
+			fmt.Errorf("source has stream type %s, depth_to_pretty only supports depth stream inputs", stream)
 	}
 	props, err := propsFromVideoSource(ctx, source)
 	if err != nil {
