@@ -3,11 +3,11 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	pb "go.viam.com/api/component/arm/v1"
 
 	"go.viam.com/rdk/components/arm"

@@ -3,12 +3,12 @@ package board
 
 import (
 	"context"
+	"errors"
 	"math"
 	"slices"
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	pb "go.viam.com/api/component/board/v1"
 	"go.viam.com/utils/protoutils"
 	"go.viam.com/utils/rpc"
