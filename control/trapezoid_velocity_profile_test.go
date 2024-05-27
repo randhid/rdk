@@ -51,7 +51,7 @@ func TestTrapezoidVelocityProfileConfig(t *testing.T) {
 					"max_vel": 1000.0,
 				},
 			},
-			"trapezoidale velocity profile block Trap1 needs max_acc field",
+			"trapezoidal velocity profile block Trap1 needs max_acc field",
 		},
 	} {
 		_, err := newTrapezoidVelocityProfile(c.conf, logger)
