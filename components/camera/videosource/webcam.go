@@ -274,16 +274,6 @@ func NewWebcam(
 	}
 	cam.Monitor()
 
-	s, err := cam.Stream(ctx)
-	if err != nil {
-		logger.Debug(err)
-	}
-
-	_, _, err = s.Next(ctx)
-	if err != nil {
-		logger.Debug(err)
-	}
-
 	return cam, nil
 }
 
