@@ -30,15 +30,12 @@ func FromVideoSource(name resource.Name, src VideoSource, logger logging.Logger)
 	}
 	return &sourceBasedCamera{
 		rtpPassthroughSource: rtpPassthroughSource,
-		Named:                name.AsNamed(),
 		VideoSource:          src,
 		Logger:               logger,
 	}
 }
 
 type sourceBasedCamera struct {
-	resource.Named
-	resource.AlwaysRebuild
 	VideoSource
 	rtpPassthroughSource rtppassthrough.Source
 	logging.Logger
@@ -185,6 +182,7 @@ func WrapVideoSourceWithProjector(
 
 // videoSource implements a Camera with a gostream.VideoSource.
 type videoSource struct {
+	resource.TriviallyReconfigurable
 	rtpPassthroughSource rtppassthrough.Source
 	videoSource          gostream.VideoSource
 	videoStream          gostream.VideoStream
@@ -246,6 +244,18 @@ func (vs *videoSource) DoCommand(ctx context.Context, cmd map[string]interface{}
 		return res.DoCommand(ctx, cmd)
 	}
 	return nil, resource.ErrDoUnimplemented
+}
+
+func (vs *videoSource) Name() resource.Name {
+	src := vs.actualSource
+	if src == nil {
+		srcCam, ok := src.(VideoSource)
+		if ok {
+			name := srcCam.Name()
+			return name
+		}
+	}
+	return resource.Name{}
 }
 
 func (vs *videoSource) Properties(ctx context.Context) (Properties, error) {

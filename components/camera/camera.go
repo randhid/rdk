@@ -73,7 +73,24 @@ type NamedImage struct {
 // A Camera is a resource that can capture frames.
 type Camera interface {
 	resource.Resource
-	VideoSource
+	// Images is used for getting simultaneous images from different imagers,
+	// along with associated metadata (just timestamp for now). It's not for getting a time series of images from the same imager.
+	Images(ctx context.Context) ([]NamedImage, resource.ResponseMetadata, error)
+
+	// Stream returns a stream that makes a best effort to return consecutive images
+	// that may have a MIME type hint dictated in the context via gostream.WithMIMETypeHint.
+	Stream(ctx context.Context, errHandlers ...gostream.ErrorHandler) (gostream.VideoStream, error)
+
+	// NextPointCloud returns the next immediately available point cloud, not necessarily one
+	// a part of a sequence. In the future, there could be streaming of point clouds.
+	NextPointCloud(ctx context.Context) (pointcloud.PointCloud, error)
+
+	// Properties returns properties that are intrinsic to the particular
+	// implementation of a camera.
+	Properties(ctx context.Context) (Properties, error)
+
+	// Close shuts down the resource and prevents further use.
+	Close(ctx context.Context) error
 }
 
 // A VideoSource represents anything that can capture frames.
@@ -111,24 +128,7 @@ type Camera interface {
 //
 // [camera component docs]: https://docs.viam.com/components/camera/
 type VideoSource interface {
-	// Images is used for getting simultaneous images from different imagers,
-	// along with associated metadata (just timestamp for now). It's not for getting a time series of images from the same imager.
-	Images(ctx context.Context) ([]NamedImage, resource.ResponseMetadata, error)
-
-	// Stream returns a stream that makes a best effort to return consecutive images
-	// that may have a MIME type hint dictated in the context via gostream.WithMIMETypeHint.
-	Stream(ctx context.Context, errHandlers ...gostream.ErrorHandler) (gostream.VideoStream, error)
-
-	// NextPointCloud returns the next immediately available point cloud, not necessarily one
-	// a part of a sequence. In the future, there could be streaming of point clouds.
-	NextPointCloud(ctx context.Context) (pointcloud.PointCloud, error)
-
-	// Properties returns properties that are intrinsic to the particular
-	// implementation of a camera.
-	Properties(ctx context.Context) (Properties, error)
-
-	// Close shuts down the resource and prevents further use.
-	Close(ctx context.Context) error
+	Camera
 }
 
 // ReadImage reads an image from the given source that is immediately available.
