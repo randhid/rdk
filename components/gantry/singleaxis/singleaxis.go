@@ -52,12 +52,12 @@ func (cfg *Config) Validate(path string) ([]string, error) {
 
 	if cfg.LengthMm <= 0 {
 		err := resource.NewConfigValidationFieldRequiredError(path, "length_mm")
-		return nil, errors.Join(err, errors.New("length must be non-zero and positive"))
+		return nil, fmt.Errorf("%w length must be non-zero and positive", err)
 	}
 
 	if cfg.MmPerRevolution <= 0 {
 		err := resource.NewConfigValidationFieldRequiredError(path, "mm_per_rev")
-		return nil, errors.Join(err, errors.New("mm_per_rev must be non-zero and positive"))
+		return nil, fmt.Errorf("%w mm_per_rev must be non-zero and positive", err)
 	}
 
 	if cfg.Board == "" && len(cfg.LimitSwitchPins) > 0 {

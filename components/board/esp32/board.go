@@ -13,8 +13,8 @@ import (
 
 var (
 	espModel       = resource.DefaultModelFamily.WithModel("esp32")
-	errUnsupported = errors.New("the ESP32 board is not supported in the RDK. " +
-		"Please use with the micro-rdk (https://github.com/viamrobotics/micro-rdk).")
+	errUnsupported = errors.New("the ESP32 board is not supported in the RDK, " +
+		"please use with the micro-rdk (https://github.com/viamrobotics/micro-rdk)")
 )
 
 type digitalInterruptConfig struct {

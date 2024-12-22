@@ -153,7 +153,7 @@ func (wb *wheeledBase) Reconfigure(ctx context.Context, deps resource.Dependenci
 				}
 				m, err := motor.FromDependencies(deps, name)
 				if err != nil {
-					return newMotors, errors.Join(err, fmt.Errorf("no %s motor named (%s)", whichMotor, name))
+					return newMotors, fmt.Errorf("%w no %s motor named (%s)", err, whichMotor, name)
 				}
 				newMotors = append(newMotors, m)
 			}
@@ -169,7 +169,7 @@ func (wb *wheeledBase) Reconfigure(ctx context.Context, deps resource.Dependenci
 					for _, name := range fromConfig {
 						m, err := motor.FromDependencies(deps, name)
 						if err != nil {
-							return newMotors, errors.Join(err, fmt.Errorf("no %s motor named (%s)", whichMotor, name))
+							return newMotors, fmt.Errorf("%w no %s motor named (%s)", err, whichMotor, name)
 						}
 						newMotors = append(newMotors, m)
 					}

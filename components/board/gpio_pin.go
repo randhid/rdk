@@ -3,7 +3,6 @@ package board
 import (
 	"context"
 	"errors"
-	"errors"
 	"fmt"
 )
 

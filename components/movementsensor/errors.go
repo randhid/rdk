@@ -2,7 +2,6 @@ package movementsensor
 
 import (
 	"errors"
-	"errors"
 	"fmt"
 )
 
