@@ -10,8 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"errors"
+
 	"github.com/mkch/gpio"
-	"github.com/pkg/errors"
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/components/board"

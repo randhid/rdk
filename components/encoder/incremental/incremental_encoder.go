@@ -3,11 +3,13 @@ package incremental
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
 
-	"github.com/pkg/errors"
+	"errors"
+
 	"go.uber.org/multierr"
 	"go.viam.com/utils"
 
@@ -137,11 +139,11 @@ func (e *Encoder) Reconfigure(
 
 	encA, err := board.DigitalInterruptByName(newConf.Pins.A)
 	if err != nil {
-		return multierr.Combine(errors.Errorf("cannot find pin (%s) for incremental Encoder", newConf.Pins.A), err)
+		return multierr.Combine(fmt.Errorf("cannot find pin (%s) for incremental Encoder", newConf.Pins.A), err)
 	}
 	encB, err := board.DigitalInterruptByName(newConf.Pins.B)
 	if err != nil {
-		return multierr.Combine(errors.Errorf("cannot find pin (%s) for incremental Encoder", newConf.Pins.B), err)
+		return multierr.Combine(fmt.Errorf("cannot find pin (%s) for incremental Encoder", newConf.Pins.B), err)
 	}
 
 	if !needRestart {

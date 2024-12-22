@@ -8,7 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pkg/errors"
+	"errors"
+
 	goutils "go.viam.com/utils"
 
 	"go.viam.com/rdk/components/board"

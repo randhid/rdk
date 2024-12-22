@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
+	"errors"
 
 	"go.viam.com/rdk/components/board"
 	fakeboard "go.viam.com/rdk/components/board/fake"
@@ -394,7 +394,7 @@ func (m *Motor) Stop(ctx context.Context, extra map[string]interface{}) error {
 	if m.Encoder != nil {
 		err := m.Encoder.SetSpeed(ctx, 0.0)
 		if err != nil {
-			return errors.Wrapf(err, "error in Stop from motor (%s)", m.Name())
+			return fmt.Errorf("%w error in Stop from motor (%s)", err, m.Name())
 		}
 	}
 	return nil
@@ -412,7 +412,7 @@ func (m *Motor) ResetZeroPosition(ctx context.Context, offset float64, extra map
 
 	err := m.Encoder.SetPosition(ctx, -1*offset)
 	if err != nil {
-		return errors.Wrapf(err, "error in ResetZeroPosition from motor (%s)", m.Name())
+		return fmt.Errorf("%w error in ResetZeroPosition from motor (%s)", err, m.Name())
 	}
 
 	return nil

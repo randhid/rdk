@@ -1,17 +1,20 @@
 package motor
 
-import "github.com/pkg/errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // NewResetZeroPositionUnsupportedError returns a standard error for when a motor
 // is required to support reseting the zero position.
 func NewResetZeroPositionUnsupportedError(motorName string) error {
-	return errors.Errorf("motor with name %s does not support ResetZeroPosition", motorName)
+	return fmt.Errorf("motor with name %s does not support ResetZeroPosition", motorName)
 }
 
 // NewPropertyUnsupportedError returns an error representing the need
 // for a motor to support a particular property.
 func NewPropertyUnsupportedError(prop Properties, motorName string) error {
-	return errors.Errorf("motor named %s has wrong support for property %#v", motorName, prop)
+	return fmt.Errorf("motor named %s has wrong support for property %#v", motorName, prop)
 }
 
 // NewZeroRPMError returns an error representing a request to move a motor at
@@ -27,7 +30,7 @@ func NewZeroRevsError() error {
 
 // NewGoToUnsupportedError returns error when a motor is required to support GoTo feature.
 func NewGoToUnsupportedError(motorName string) error {
-	return errors.Errorf("motor with name %s does not support GoTo", motorName)
+	return fmt.Errorf("motor with name %s does not support GoTo", motorName)
 }
 
 // NewControlParametersUnimplementedError returns an error when a control parameters are
@@ -38,5 +41,5 @@ func NewControlParametersUnimplementedError() error {
 
 // NewSetRPMUnsupportedError returns an error when a motor does not support SetRPM.
 func NewSetRPMUnsupportedError(motorName string) error {
-	return errors.Errorf("motor named %s does not support SetRPM", motorName)
+	return fmt.Errorf("motor named %s does not support SetRPM", motorName)
 }

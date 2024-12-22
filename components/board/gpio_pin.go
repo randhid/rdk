@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pkg/errors"
+	"errors"
 )
 
 // A GPIOPin represents an individual GPIO pin on a board.

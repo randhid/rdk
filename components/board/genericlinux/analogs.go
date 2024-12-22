@@ -6,7 +6,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/pkg/errors"
+	"errors"
+
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/components/board"

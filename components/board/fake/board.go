@@ -9,7 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
+	"errors"
+
 	"go.uber.org/multierr"
 	pb "go.viam.com/api/component/board/v1"
 	"go.viam.com/utils"
@@ -175,7 +176,7 @@ func (b *Board) AnalogByName(name string) (board.Analog, error) {
 	defer b.mu.RUnlock()
 	a, ok := b.Analogs[name]
 	if !ok {
-		return nil, errors.Errorf("can't find AnalogReader (%s)", name)
+		return nil, fmt.Errorf("can't find AnalogReader (%s)", name)
 	}
 	return a, nil
 }

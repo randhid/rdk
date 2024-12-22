@@ -4,10 +4,11 @@ package fake
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
+	"errors"
 
 	"go.viam.com/rdk/components/arm"
 	ur "go.viam.com/rdk/components/arm/universalrobots"
@@ -261,7 +262,7 @@ func modelFromName(model, name string) (referenceframe.Model, error) {
 	case Model.Name:
 		return referenceframe.UnmarshalModelJSON(fakejson, name)
 	default:
-		return nil, errors.Errorf("fake arm cannot be created, unsupported arm-model: %s", model)
+		return nil, fmt.Errorf("fake arm cannot be created, unsupported arm-model: %s", model)
 	}
 }
 

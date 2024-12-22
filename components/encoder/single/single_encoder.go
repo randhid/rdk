@@ -23,11 +23,11 @@ package single
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
 
-	"github.com/pkg/errors"
 	"go.uber.org/multierr"
 	"go.viam.com/utils"
 
@@ -158,7 +158,7 @@ func (e *Encoder) Reconfigure(
 
 	di, err := board.DigitalInterruptByName(newConf.Pins.I)
 	if err != nil {
-		return multierr.Combine(errors.Errorf("cannot find pin (%s) for Encoder", newConf.Pins.I), err)
+		return multierr.Combine(fmt.Errorf("cannot find pin (%s) for Encoder", newConf.Pins.I), err)
 	}
 
 	if !needRestart {

@@ -7,8 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"errors"
+
 	"github.com/bep/debounce"
-	"github.com/pkg/errors"
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/components/board"
@@ -262,7 +263,7 @@ func (c *Controller) newButton(ctx context.Context, brd board.Board, interrupt b
 	tickChan := make(chan board.Tick)
 	err := brd.StreamTicks(ctx, []board.DigitalInterrupt{interrupt}, tickChan, nil)
 	if err != nil {
-		return errors.Wrap(err, "error getting digital interrupt ticks")
+		return fmt.Errorf("%w error getting digital interrupt ticks", err)
 	}
 
 	c.activeBackgroundWorkers.Add(1)

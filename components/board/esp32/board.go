@@ -5,7 +5,7 @@ package esp32
 import (
 	"context"
 
-	"github.com/pkg/errors"
+	"errors"
 
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/logging"

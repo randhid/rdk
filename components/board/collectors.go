@@ -4,7 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/pkg/errors"
+	"errors"
+
 	pb "go.viam.com/api/component/board/v1"
 	"google.golang.org/protobuf/types/known/anypb"
 
