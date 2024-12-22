@@ -4,9 +4,9 @@ package genericlinux
 
 import (
 	"context"
-	"errors"
 	"sync"
 
+	"github.com/pkg/errors"
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/components/board"

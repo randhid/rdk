@@ -2,10 +2,10 @@ package gpio
 
 import (
 	"context"
-	"errors"
 	"math"
 	"sync"
 
+	"github.com/pkg/errors"
 	"go.uber.org/multierr"
 
 	"go.viam.com/rdk/components/board"
@@ -150,22 +150,22 @@ func (m *Motor) turnOff(ctx context.Context, extra map[string]interface{}) error
 	var errs error
 	m.powerPct = 0.0
 	if m.EnablePinLow != nil {
-		enLowErr := errors.Join(m.EnablePinLow.Set(ctx, true, extra), errors.New("unable to disable low signal"))
+		enLowErr := errors.Wrap(m.EnablePinLow.Set(ctx, true, extra), "unable to disable low signal")
 		errs = multierr.Combine(errs, enLowErr)
 	}
 	if m.EnablePinHigh != nil {
-		enHighErr := errors.Join(m.EnablePinHigh.Set(ctx, false, extra), errors.New("unable to disable high signal"))
+		enHighErr := errors.Wrap(m.EnablePinHigh.Set(ctx, false, extra), "unable to disable high signal")
 		errs = multierr.Combine(errs, enHighErr)
 	}
 
 	if m.A != nil && m.B != nil {
-		aErr := errors.Join(m.A.Set(ctx, false, extra), errors.New("could not set A pin to low"))
-		bErr := errors.Join(m.B.Set(ctx, false, extra), errors.New("could not set B pin to low"))
+		aErr := errors.Wrap(m.A.Set(ctx, false, extra), "could not set A pin to low")
+		bErr := errors.Wrap(m.B.Set(ctx, false, extra), "could not set B pin to low")
 		errs = multierr.Combine(errs, aErr, bErr)
 	}
 
 	if m.PWM != nil {
-		pwmErr := errors.Join(m.PWM.Set(ctx, false, extra), errors.New("could not set PWM pin to low"))
+		pwmErr := errors.Wrap(m.PWM.Set(ctx, false, extra), "could not set PWM pin to low")
 		errs = multierr.Combine(errs, pwmErr)
 	}
 	return errs
@@ -289,7 +289,7 @@ func (m *Motor) GoFor(ctx context.Context, rpm, revolutions float64, extra map[s
 	powerPct, waitDur := goForMath(m.maxRPM, rpm, revolutions)
 	err = m.SetPower(ctx, powerPct, extra)
 	if err != nil {
-		return errors.Join(err, errors.New("error in GoFor"))
+		return errors.Wrap(err, "error in GoFor")
 	}
 
 	if m.opMgr.NewTimedWaitOp(ctx, waitDur) {
@@ -342,7 +342,7 @@ func (m *Motor) SetRPM(ctx context.Context, rpm float64, extra map[string]interf
 	powerPct := rpm / m.maxRPM
 	err = m.SetPower(ctx, powerPct, extra)
 	if err != nil {
-		return errors.Join(err, errors.New("error in SetRPM"))
+		return errors.Wrap(err, "error in GoFor")
 	}
 
 	return nil

@@ -2,8 +2,9 @@ package genericlinux
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
+
+	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/resource"
 )

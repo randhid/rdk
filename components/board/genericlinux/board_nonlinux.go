@@ -7,7 +7,7 @@ package genericlinux
 import (
 	"context"
 
-	"errors"
+	"github.com/pkg/errors"
 
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/logging"
