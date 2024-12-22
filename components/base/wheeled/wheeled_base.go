@@ -248,7 +248,7 @@ func (wb *wheeledBase) Spin(ctx context.Context, angleDeg, degsPerSec float64, e
 	if math.Abs(degsPerSec) < 0.0001 {
 		err := wb.Stop(ctx, nil)
 		if err != nil {
-			return fmt.Errorf("error when trying to spin at a speed of 0: %v", err)
+			return fmt.Errorf("error when trying to spin at a speed of 0: %w", err)
 		}
 		return err
 	}
@@ -267,7 +267,7 @@ func (wb *wheeledBase) MoveStraight(ctx context.Context, distanceMm int, mmPerSe
 	if math.Abs(mmPerSec) < 0.0001 || distanceMm == 0 {
 		err := wb.Stop(ctx, nil)
 		if err != nil {
-			return fmt.Errorf("error when trying to move straight at a speed and/or distance of 0: %v", err)
+			return fmt.Errorf("error when trying to move straight at a speed and/or distance of 0: %w", err)
 		}
 		return err
 	}

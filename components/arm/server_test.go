@@ -25,7 +25,7 @@ var (
 	errGetJointsFailed           = errors.New("can't get joint positions")
 	errMoveToPositionFailed      = errors.New("can't move to pose")
 	errMoveToJointPositionFailed = errors.New("can't move to joint positions")
-	errStopUnimplemented         = errors.New("Stop unimplemented")
+	errStopUnimplemented         = errors.New("stop unimplemented")
 	errArmUnimplemented          = errors.New("not found")
 )
 

@@ -46,7 +46,7 @@ func newAnalogCollector(resource interface{}, params data.CollectorParams) (data
 		var analogValue AnalogValue
 		if _, ok := arg[analogReaderNameKey]; !ok {
 			return res, data.FailedToReadErr(params.ComponentName, analogs.String(),
-				errors.New("Must supply reader_name in additional_params for analog collector"))
+				errors.New("must supply reader_name in additional_params for analog collector"))
 		}
 		if reader, err := board.AnalogByName(arg[analogReaderNameKey].String()); err == nil {
 			analogValue, err = reader.Read(ctx, data.FromDMExtraMap)
@@ -85,7 +85,7 @@ func newGPIOCollector(resource interface{}, params data.CollectorParams) (data.C
 		var value bool
 		if _, ok := arg[gpioPinNameKey]; !ok {
 			return res, data.FailedToReadErr(params.ComponentName, gpios.String(),
-				errors.New("Must supply pin_name in additional params for gpio collector"))
+				errors.New("must supply pin_name in additional params for gpio collector"))
 		}
 		if gpio, err := board.GPIOPinByName(arg[gpioPinNameKey].String()); err == nil {
 			value, err = gpio.Get(ctx, data.FromDMExtraMap)

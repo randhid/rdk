@@ -389,7 +389,7 @@ func (s *servoGPIO) Stop(ctx context.Context, extra map[string]interface{}) erro
 func (s *servoGPIO) IsMoving(ctx context.Context) (bool, error) {
 	res, err := s.pin.PWM(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("servo error while checking if moving", err)
+		return false, fmt.Errorf("%w servo error while checking if moving", err)
 	}
 	if int(res) == 0 {
 		return false, nil
