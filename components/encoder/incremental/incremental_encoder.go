@@ -3,12 +3,11 @@ package incremental
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
-
-	"errors"
 
 	"go.uber.org/multierr"
 	"go.viam.com/utils"

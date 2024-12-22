@@ -5,10 +5,9 @@ package pinwrappers
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
-
-	"errors"
 
 	goutils "go.viam.com/utils"
 

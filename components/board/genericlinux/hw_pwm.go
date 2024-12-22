@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"errors"
-
 	goutils "go.viam.com/utils"
 
 	"go.viam.com/rdk/logging"
@@ -47,7 +45,7 @@ func writeValue(filepath string, value uint64, logger logging.Logger) error {
 	if err != nil {
 		logger.Debugf("Encountered error writing to sysfs: %s", err)
 	}
-	return errors.Wrap(err, filepath)
+	return fmt.Errorf("could not write to filepath %s, got error %w", filepath, err)
 }
 
 func (pwm *pwmDevice) writeChip(filename string, value uint64) error {
@@ -122,8 +120,7 @@ func (pwm *pwmDevice) disable() error {
 
 // Only call this from public functions, to avoid double-wrapping the errors.
 func (pwm *pwmDevice) wrapError(err error) error {
-	// Note that if err is nil, errors.Wrap() will return nil, too.
-	return errors.Wrapf(err, "HW PWM chipPath %s, line %d", pwm.chipPath, pwm.line)
+	return fmt.Errorf("%w HW PWM chipPath %s, line %d", err, pwm.chipPath, pwm.line)
 }
 
 // SetPwm configures an exported pin and enables its output signal.

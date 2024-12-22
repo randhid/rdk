@@ -1,9 +1,9 @@
 package movementsensor
 
 import (
-	"fmt"
-
 	"errors"
+	"errors"
+	"fmt"
 )
 
 // AddressReadError returns a standard error for when we cannot read from an I2C bus.

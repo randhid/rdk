@@ -2,9 +2,8 @@ package arm_test
 
 import (
 	"context"
-	"testing"
-
 	"errors"
+	"testing"
 
 	"github.com/golang/geo/r3"
 	commonpb "go.viam.com/api/common/v1"

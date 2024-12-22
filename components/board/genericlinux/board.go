@@ -7,12 +7,11 @@ package genericlinux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
 	"time"
-
-	"errors"
 
 	"go.uber.org/multierr"
 	pb "go.viam.com/api/component/board/v1"
@@ -199,7 +198,7 @@ func (b *Board) reconfigureAnalogReaders(ctx context.Context, newConf *LinuxBoar
 	for _, c := range newConf.AnalogReaders {
 		channel, err := strconv.Atoi(c.Channel)
 		if err != nil {
-			return errors.Errorf("bad analog pin (%s)", c.Channel)
+			return fmt.Errorf("bad analog pin (%s)", c.Channel)
 		}
 
 		bus := buses.NewSpiBus(c.SPIBus)
@@ -371,7 +370,7 @@ type Board struct {
 func (b *Board) AnalogByName(name string) (board.Analog, error) {
 	a, ok := b.analogReaders[name]
 	if !ok {
-		return nil, errors.Errorf("can't find AnalogReader (%s)", name)
+		return nil, fmt.Errorf("can't find AnalogReader (%s)", name)
 	}
 	return a, nil
 }
@@ -447,7 +446,7 @@ func (b *Board) GPIOPinByName(pinName string) (board.GPIOPin, error) {
 		return interrupt, nil
 	}
 
-	return nil, errors.Errorf("cannot find GPIO for unknown pin: %s", pinName)
+	return nil, fmt.Errorf("cannot find GPIO for unknown pin: %s", pinName)
 }
 
 // SetPowerMode sets the board to the given power mode. If provided,

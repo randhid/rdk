@@ -4,9 +4,8 @@ package genericlinux
 
 import (
 	"context"
-	"sync"
-
 	"errors"
+	"sync"
 
 	"go.viam.com/utils"
 

@@ -3,12 +3,11 @@ package gpio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
 	"time"
-
-	"errors"
 
 	viamutils "go.viam.com/utils"
 

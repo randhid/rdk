@@ -33,11 +33,10 @@ package wheeled
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
-
-	"errors"
 
 	"github.com/golang/geo/r3"
 	"go.uber.org/multierr"

@@ -2,9 +2,9 @@ package board
 
 import (
 	"context"
-	"fmt"
-
 	"errors"
+	"errors"
+	"fmt"
 )
 
 // A GPIOPin represents an individual GPIO pin on a board.

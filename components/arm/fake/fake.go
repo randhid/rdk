@@ -4,11 +4,10 @@ package fake
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
-
-	"errors"
 
 	"go.viam.com/rdk/components/arm"
 	ur "go.viam.com/rdk/components/arm/universalrobots"
