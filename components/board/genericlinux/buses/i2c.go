@@ -82,6 +82,7 @@ func (bus *i2cBus) OpenHandle(addr byte) (I2CHandle, error) {
 type I2cHandle struct { // Implements the I2CHandle interface
 	device    *i2c.Dev // Will become nil if we Close() the handle
 	parentBus *i2cBus
+	mu 	 sync.Mutex // Lock the handle during transactions.
 }
 
 // Write writes the given bytes to the handle. For I2C devices that organize their data into
@@ -109,6 +110,8 @@ func (h *I2cHandle) transactAtRegister(register byte, w, r []byte) error {
 	fullW := make([]byte, len(w)+1)
 	fullW[0] = register
 	copy(fullW[1:], w)
+	h.mu.Lock() // Lock the bus so no other handle can use it until this handle is closed.
+	defer h.mu.Unlock() // Unlock the bus when we're done with it
 	return h.device.Tx(fullW, r)
 }
 
