@@ -40,7 +40,7 @@ func NewClientFromConn(
 	}, nil
 }
 
-func (c *client) Move(ctx context.Context, angleDeg uint32, extra map[string]interface{}) error {
+func (c *client) Move(ctx context.Context, angleDeg int32, extra map[string]interface{}) error {
 	ext, err := protoutils.StructToStructPb(extra)
 	if err != nil {
 		return err
@@ -52,7 +52,7 @@ func (c *client) Move(ctx context.Context, angleDeg uint32, extra map[string]int
 	return nil
 }
 
-func (c *client) Position(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+func (c *client) Position(ctx context.Context, extra map[string]interface{}) (int32, error) {
 	ext, err := protoutils.StructToStructPb(extra)
 	if err != nil {
 		return 0, err

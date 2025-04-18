@@ -52,7 +52,7 @@ func TestCollectors(t *testing.T) {
 
 func newServo() servo.Servo {
 	s := &inject.Servo{}
-	s.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+	s.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (int32, error) {
 		return 1.0, nil
 	}
 	return s

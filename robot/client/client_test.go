@@ -369,12 +369,12 @@ func TestStatusClient(t *testing.T) {
 	}
 
 	injectServo := &inject.Servo{}
-	var capServoAngle uint32
-	injectServo.MoveFunc = func(ctx context.Context, angle uint32, extra map[string]interface{}) error {
+	var capServoAngle int32
+	injectServo.MoveFunc = func(ctx context.Context, angle int32, extra map[string]interface{}) error {
 		capServoAngle = angle
 		return nil
 	}
-	injectServo.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+	injectServo.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (int32, error) {
 		return 5, nil
 	}
 

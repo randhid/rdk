@@ -210,7 +210,7 @@ func (s *servoGPIO) Reconfigure(ctx context.Context, deps resource.Dependencies,
 	}
 
 	// Try to detect the PWM resolution.
-	if err := s.Move(ctx, uint32(startPos), nil); err != nil {
+	if err := s.Move(ctx, int32(startPos), nil); err != nil {
 		return errors.Wrap(err, "couldn't move servo to start position")
 	}
 
@@ -218,7 +218,7 @@ func (s *servoGPIO) Reconfigure(ctx context.Context, deps resource.Dependencies,
 		return errors.Wrap(err, "failed to guess the pwm resolution")
 	}
 
-	if err := s.Move(ctx, uint32(startPos), nil); err != nil {
+	if err := s.Move(ctx, int32(startPos), nil); err != nil {
 		return errors.Wrap(err, "couldn't move servo back to start position")
 	}
 
@@ -325,7 +325,7 @@ func (s *servoGPIO) findPWMResolution(ctx context.Context) error {
 
 // Move moves the servo to the given angle (0-180 degrees)
 // This will block until done or a new operation cancels this one.
-func (s *servoGPIO) Move(ctx context.Context, ang uint32, extra map[string]interface{}) error {
+func (s *servoGPIO) Move(ctx context.Context, ang int32, extra map[string]interface{}) error {
 	ctx, done := s.opMgr.New(ctx)
 	defer done()
 
@@ -353,7 +353,7 @@ func (s *servoGPIO) Move(ctx context.Context, ang uint32, extra map[string]inter
 }
 
 // Position returns the current set angle (degrees) of the servo.
-func (s *servoGPIO) Position(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+func (s *servoGPIO) Position(ctx context.Context, extra map[string]interface{}) (int32, error) {
 	pct, err := s.pin.PWM(ctx, nil)
 	if err != nil {
 		return 0, errors.Wrap(err, "couldn't get servo pin duty cycle")
@@ -369,7 +369,7 @@ func (s *servoGPIO) Position(ctx context.Context, extra map[string]interface{}) 
 		}
 	}
 
-	return uint32(mapDutyCylePctToDeg(s.minUs, s.maxUs, s.minDeg, s.maxDeg, pct, s.frequency)), nil
+	return int32(mapDutyCylePctToDeg(s.minUs, s.maxUs, s.minDeg, s.maxDeg, pct, s.frequency)), nil
 }
 
 // Stop stops the servo. It is assumed the servo stops immediately.

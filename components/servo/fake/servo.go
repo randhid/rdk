@@ -27,7 +27,7 @@ func init() {
 
 // A Servo allows setting and reading a single angle.
 type Servo struct {
-	angle uint32
+	angle int32
 	resource.Named
 	resource.TriviallyReconfigurable
 	resource.TriviallyCloseable
@@ -35,13 +35,13 @@ type Servo struct {
 }
 
 // Move sets the given angle.
-func (s *Servo) Move(ctx context.Context, angleDeg uint32, extra map[string]interface{}) error {
+func (s *Servo) Move(ctx context.Context, angleDeg int32, extra map[string]interface{}) error {
 	s.angle = angleDeg
 	return nil
 }
 
 // Position returns the set angle.
-func (s *Servo) Position(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+func (s *Servo) Position(ctx context.Context, extra map[string]interface{}) (int32, error) {
 	return s.angle, nil
 }
 

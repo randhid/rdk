@@ -34,11 +34,11 @@ func TestClient(t *testing.T) {
 	workingServo := &inject.Servo{}
 	failingServo := &inject.Servo{}
 
-	workingServo.MoveFunc = func(ctx context.Context, angle uint32, extra map[string]interface{}) error {
+	workingServo.MoveFunc = func(ctx context.Context, angle int32, extra map[string]interface{}) error {
 		actualExtra = extra
 		return nil
 	}
-	workingServo.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+	workingServo.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (int32, error) {
 		actualExtra = extra
 		return 20, nil
 	}
@@ -47,10 +47,10 @@ func TestClient(t *testing.T) {
 		return nil
 	}
 
-	failingServo.MoveFunc = func(ctx context.Context, angle uint32, extra map[string]interface{}) error {
+	failingServo.MoveFunc = func(ctx context.Context, angle int32, extra map[string]interface{}) error {
 		return errMoveFailed
 	}
-	failingServo.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+	failingServo.PositionFunc = func(ctx context.Context, extra map[string]interface{}) (int32, error) {
 		return 0, errPositionUnreadable
 	}
 	failingServo.StopFunc = func(ctx context.Context, extra map[string]interface{}) error {

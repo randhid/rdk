@@ -12,8 +12,8 @@ type Servo struct {
 	servo.Servo
 	name         resource.Name
 	DoFunc       func(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error)
-	MoveFunc     func(ctx context.Context, angleDeg uint32, extra map[string]interface{}) error
-	PositionFunc func(ctx context.Context, extra map[string]interface{}) (uint32, error)
+	MoveFunc     func(ctx context.Context, angleDeg int32, extra map[string]interface{}) error
+	PositionFunc func(ctx context.Context, extra map[string]interface{}) (int32, error)
 	StopFunc     func(ctx context.Context, extra map[string]interface{}) error
 	IsMovingFunc func(context.Context) (bool, error)
 }
@@ -29,7 +29,7 @@ func (s *Servo) Name() resource.Name {
 }
 
 // Move calls the injected Move or the real version.
-func (s *Servo) Move(ctx context.Context, angleDeg uint32, extra map[string]interface{}) error {
+func (s *Servo) Move(ctx context.Context, angleDeg int32, extra map[string]interface{}) error {
 	if s.MoveFunc == nil {
 		return s.Servo.Move(ctx, angleDeg, extra)
 	}
@@ -37,7 +37,7 @@ func (s *Servo) Move(ctx context.Context, angleDeg uint32, extra map[string]inte
 }
 
 // Position calls the injected Current or the real version.
-func (s *Servo) Position(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+func (s *Servo) Position(ctx context.Context, extra map[string]interface{}) (int32, error) {
 	if s.PositionFunc == nil {
 		return s.Servo.Position(ctx, extra)
 	}
